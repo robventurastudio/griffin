@@ -135,3 +135,37 @@ The intent is to make tinkering safe and easy:
 
 Because everything is kept intentionally small you can follow the code in a
 single sitting before making it your own.
+
+## Roadmap: from sandbox to broad deployment
+
+The starter loop is intentionally lightweight so you can understand each part.
+To turn it into a production-grade, widely deployed system, progress through
+these milestones:
+
+1. **Reliability hardening** – add automated tests for the countdown/strategy
+   orchestration, implement structured logging, and gate merges with CI to keep
+   the event loop stable as new strategies are added.
+2. **Configuration & secrets management** – switch from shell-exported
+   environment variables to a centralized config/secrets store (e.g., AWS
+   Parameter Store, Vault) and introduce tiered config files for paper vs.
+   live trading venues.
+3. **Observability & alerting** – ship logs/metrics/traces to a managed stack
+   (CloudWatch, Grafana, etc.), expose heartbeat dashboards for countdowns,
+   position states, and order latencies, and set up alerts on disconnects or
+   rule breaches.
+4. **Strategy lifecycle tooling** – define a registry for strategies with
+   versioning, feature flags, and A/B rollout controls so you can hot-swap or
+   canary new logic without restarting the service.
+5. **Risk, compliance, and controls** – codify position limits, circuit
+   breakers, and compliance checks (short locate, PDT rules, concentration
+   limits) plus audit logs for all orders.
+6. **Scaling infrastructure** – containerize the trader, deploy it through an
+   orchestration layer (ECS/Kubernetes) with redundancy across regions/accounts,
+   and front it with a job scheduler or control plane that can coordinate
+   multiple symbol clusters.
+7. **Data & model enrichment** – plug in higher-quality feeds (SIP, alt data),
+   manage historical datasets for simulation, and add feature pipelines so more
+   advanced strategies can share normalized inputs.
+
+Each milestone keeps the existing architecture intact while layering the
+operational guardrails, tooling, and scalability needed for a broader rollout.
