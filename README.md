@@ -23,6 +23,59 @@ strategy, plug in new data sources, or rip out pieces for other experiments.
 └── requirements.txt
 ```
 
+## Quick start: connect & run
+
+If you just want to make sure your Alpaca keys work and fire up the sample
+strategy, follow these five steps:
+
+1. **Install dependencies**
+
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
+
+2. **Export your [Alpaca API credentials](https://docs.alpaca.markets/reference/api-overview)**.
+   Paper trading keys are perfect while you experiment:
+
+   ```bash
+   export APCA_API_KEY_ID="your-key"
+   export APCA_API_SECRET_KEY="your-secret"
+   export APCA_API_BASE_URL="https://paper-api.alpaca.markets"
+   ```
+
+3. **Verify the connection** by asking Alpaca for your account status.  A
+   healthy response confirms that the credentials and network path are valid:
+
+   ```bash
+   python - <<'PY'
+   from alpaca_trader.alpaca_client import AlpacaClient
+
+   client = AlpacaClient()
+   account = client.get_account()
+   print(f"Connected as {account.account_number} (status={account.status})")
+   PY
+   ```
+
+4. **Pick the symbols and sizing** you want to trade.  The defaults live in
+   `alpaca_trader/universe.py`, but you can always pass overrides via the CLI
+   flags shown below.
+
+5. **Run the trading loop** (this launches the countdown timers, data stream,
+   and autonomous execution):
+
+   ```bash
+   python scripts/run_open_close.py \
+       --symbols "SPY,QQQ" \
+       --qty 5 \
+       --direction long
+   ```
+
+That’s it—you now have a minimal, end-to-end connection to Alpaca plus a sample
+strategy you can extend.  The next sections dive into the repository layout and
+the configuration knobs that make tinkering easy.
+
 ## Getting started
 
 1. Create a virtual environment and install the dependencies:
