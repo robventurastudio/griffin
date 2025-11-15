@@ -76,6 +76,37 @@ That’s it—you now have a minimal, end-to-end connection to Alpaca plus a sam
 strategy you can extend.  The next sections dive into the repository layout and
 the configuration knobs that make tinkering easy.
 
+## Pre-flight checklist before syncing to Alpaca
+
+Before you point this loop at a funded live account, run through the following
+sanity checks to avoid expensive surprises:
+
+1. **Stay on paper trading until the loop is boring.** Let the engine run for a
+   few sessions on the `paper-api` endpoint, confirm the countdowns line up with
+   official market hours, and inspect every order the CLI places.
+2. **Double-check credentials and permissions.** Use the `get_account()` snippet
+   above to confirm the account status is `ACTIVE` (paper) or `APPROVED` (live)
+   and that the API key has trading permissions for the venue you intend to use.
+3. **Validate symbol lists and sizing.** Ensure your `--symbols` set is tradable
+   on Alpaca, that each symbol satisfies your account’s pattern-day-trader (PDT)
+   and short-sale locate requirements, and that the configured `--qty` or custom
+   sizing logic keeps total exposure within your comfort zone.
+4. **Watch the live ticker feed.** Run with `--disable-data-stream` both on and
+   off to make sure the websocket reconnects cleanly and does not overwhelm your
+   machine or Alpaca’s rate limits when you scale to more symbols.
+5. **Rehearse failure handling.** Kill the process mid-run, yank network
+   connectivity, or intentionally raise an exception in a strategy to verify the
+   engine cancels open orders and flattens positions on restart.
+6. **Log everything.** Even a simple CSV (timestamp, symbol, side, qty, price)
+   is invaluable for reconciling fills.  Wire up a logger before going live so
+   you have proof of intent if Alpaca support needs context.
+7. **Add basic risk guardrails.** Hard-code a max dollar position per symbol and
+   a daily loss lockout in the engine until the dedicated risk module lands; it
+   is the cheapest insurance policy you can add right now.
+
+Only after you can answer “yes” to each item should you point the configuration
+at `https://api.alpaca.markets` and trade with real capital.
+
 ## Getting started
 
 1. Create a virtual environment and install the dependencies:
