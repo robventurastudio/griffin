@@ -1,0 +1,1 @@
+TRADER_QTY=1
