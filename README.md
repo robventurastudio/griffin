@@ -1,10 +1,6 @@
 # Alpaca Retail Trader
 
-This repository is the very first cut of a retail-trading playground powered by
-[Alpaca](https://alpaca.markets/).  The goal is to provide a tiny but complete
-example that buys a basket of ETFs/equities at the opening bell and sells the
-entire position when the market closes.  From here you can iterate on the
-strategy, plug in new data sources, or rip out pieces for other experiments.
+This repository is a minimal but production-minded retail trading playground for [Alpaca](https://alpaca.markets/). It includes countdown-aware open/close automation, a live data stream, pluggable strategies, and now a ergonomic CLI, logging stack, launch helper, and lightweight dashboard so you can operate everything from a Mac terminal.
 
 ## Project layout
 
@@ -12,23 +8,26 @@ strategy, plug in new data sources, or rip out pieces for other experiments.
 .
 ├── alpaca_trader/
 │   ├── alpaca_client.py    # lightweight REST wrapper
+│   ├── cli.py              # argparse-based command line interface
 │   ├── config.py           # shared configuration knobs
 │   ├── data_stream.py      # live trade feed helper
+│   ├── dashboard.py        # FastAPI-powered local dashboard
 │   ├── engine.py           # orchestrates the strategy loop & countdowns
+│   ├── logging_setup.py    # rotating log configuration + trade CSV writer
 │   ├── strategies/
 │   │   └── open_close_dummy.py
 │   └── universe.py         # list of symbols to trade
 ├── scripts/
-│   └── run_open_close.py   # CLI entrypoint
-└── requirements.txt
+│   ├── run_open_close.py   # legacy entrypoint -> delegates to CLI
+│   └── rotate_logs.py      # prune old log files
+├── launch_trader.sh        # convenience launcher for daily use
+├── requirements.txt
+└── .env.example            # template for required environment variables
 ```
 
-## Quick start: connect & run
+## Setup
 
-If you just want to make sure your Alpaca keys work and fire up the sample
-strategy, follow these five steps:
-
-1. **Install dependencies**
+1. **Create a virtual environment and install dependencies**
 
    ```bash
    python -m venv .venv
@@ -36,17 +35,16 @@ strategy, follow these five steps:
    pip install -r requirements.txt
    ```
 
-2. **Export your [Alpaca API credentials](https://docs.alpaca.markets/reference/api-overview)**.
-   Paper trading keys are perfect while you experiment:
+2. **Export your Alpaca credentials** (paper trading is recommended while experimenting):
 
    ```bash
+   cp .env.example .env  # optional helper if you use direnv
    export APCA_API_KEY_ID="your-key"
    export APCA_API_SECRET_KEY="your-secret"
    export APCA_API_BASE_URL="https://paper-api.alpaca.markets"
    ```
 
-3. **Verify the connection** by asking Alpaca for your account status.  A
-   healthy response confirms that the credentials and network path are valid:
+3. **Verify connectivity**
 
    ```bash
    python - <<'PY'
@@ -58,145 +56,107 @@ strategy, follow these five steps:
    PY
    ```
 
-4. **Pick the symbols and sizing** you want to trade.  The defaults live in
-   `alpaca_trader/universe.py`, but you can always pass overrides via the CLI
-   flags shown below.
+## Command-line interface
 
-5. **Run the trading loop** (this launches the countdown timers, data stream,
-   and autonomous execution):
+All operations run through `python -m alpaca_trader.cli` (or `./launch_trader.sh`). Use `--help` on any subcommand for details.
 
-   ```bash
-   python scripts/run_open_close.py \
-       --symbols "SPY,QQQ" \
-       --qty 5 \
-       --direction long
-   ```
+### Trade
 
-That’s it—you now have a minimal, end-to-end connection to Alpaca plus a sample
-strategy you can extend.  The next sections dive into the repository layout and
-the configuration knobs that make tinkering easy.
+Start the open/close loop:
+
+```bash
+python -m alpaca_trader.cli trade \
+  --symbols "SPY,QQQ" \
+  --qty 5 \
+  --direction long \
+  --strategy alpaca_trader.strategies.open_close_dummy:OpenCloseStrategy
+```
+
+Flags:
+- `--symbols`: comma-separated overrides for the universe (defaults to `alpaca_trader/universe.py`).
+- `--qty`: number of shares per symbol (default from `alpaca_trader/config.py`).
+- `--direction`: `long` or `short`.
+- `--disable-data-stream`: skip the websocket feed.
+- `--strategy`: custom strategy path in `module:Class` format.
+- `--poll-interval`: seconds between clock polls (defaults to `POLL_INTERVAL_SECONDS`).
+
+### Status
+
+```bash
+python -m alpaca_trader.cli status
+```
+
+Prints current time, market open/closed state, countdown to next bell, configured universe, and open positions.
+
+### Logs
+
+```bash
+python -m alpaca_trader.cli logs --tail 100
+```
+
+Tails `logs/app.log` (created automatically).
+
+### Health check
+
+```bash
+python -m alpaca_trader.cli health-check
+```
+
+Confirms required environment variables, Alpaca account status, and fetches the latest bar for the default universe to ensure data access. Returns non-zero on failure.
+
+### Dashboard
+
+```bash
+python -m alpaca_trader.cli dashboard --port 8000
+```
+
+Starts a local-only FastAPI dashboard at `http://127.0.0.1:8000` showing current time/countdown, universe, positions, recent trades (`logs/trades.csv`), and a tail of the application log.
+
+## Logging & observability
+
+Logging is configured via `alpaca_trader/logging_setup.py` and kicks in as soon as the CLI starts:
+
+- `logs/app.log`: main application log (rotates daily).
+- `logs/errors.log`: errors/exceptions (rotates daily).
+- `logs/trades.csv`: append-only trade log capturing order submissions.
+
+The logs directory is created automatically. Secrets are never logged; missing env vars are reported by name only. Use `scripts/rotate_logs.py` to prune old files (`--days` flag, defaults to 7).
+
+## Launch script
+
+For everyday use, run:
+
+```bash
+./launch_trader.sh --symbols "QQQ,NVDA" --qty 2
+```
+
+The script activates `.venv` if present and then invokes the CLI `trade` subcommand with any additional arguments you provide.
+
+## Operational hygiene
+
+- **Environment-only secrets**: credentials are read strictly from `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, and `APCA_API_BASE_URL`. Do not hardcode secrets.
+- **Resilient loop**: the engine wraps the main loop with exception logging and exponential backoff so transient failures retry without exiting. `Ctrl+C` still exits cleanly.
+- **Rate limits**: polling cadence is centralized via `POLL_INTERVAL_SECONDS`; API errors (including rate limits) are logged and trigger backoff.
+- **Safety checks**: use `health-check` before the session starts and review `logs/app.log`/`logs/errors.log` for anomalies.
 
 ## Pre-flight checklist before syncing to Alpaca
 
-Before you point this loop at a funded live account, run through the following
-sanity checks to avoid expensive surprises:
+Run through these checks before hitting a live account:
 
-1. **Stay on paper trading until the loop is boring.** Let the engine run for a
-   few sessions on the `paper-api` endpoint, confirm the countdowns line up with
-   official market hours, and inspect every order the CLI places.
-2. **Double-check credentials and permissions.** Use the `get_account()` snippet
-   above to confirm the account status is `ACTIVE` (paper) or `APPROVED` (live)
-   and that the API key has trading permissions for the venue you intend to use.
-3. **Validate symbol lists and sizing.** Ensure your `--symbols` set is tradable
-   on Alpaca, that each symbol satisfies your account’s pattern-day-trader (PDT)
-   and short-sale locate requirements, and that the configured `--qty` or custom
-   sizing logic keeps total exposure within your comfort zone.
-4. **Watch the live ticker feed.** Run with `--disable-data-stream` both on and
-   off to make sure the websocket reconnects cleanly and does not overwhelm your
-   machine or Alpaca’s rate limits when you scale to more symbols.
-5. **Rehearse failure handling.** Kill the process mid-run, yank network
-   connectivity, or intentionally raise an exception in a strategy to verify the
-   engine cancels open orders and flattens positions on restart.
-6. **Log everything.** Even a simple CSV (timestamp, symbol, side, qty, price)
-   is invaluable for reconciling fills.  Wire up a logger before going live so
-   you have proof of intent if Alpaca support needs context.
-7. **Add basic risk guardrails.** Hard-code a max dollar position per symbol and
-   a daily loss lockout in the engine until the dedicated risk module lands; it
-   is the cheapest insurance policy you can add right now.
-
-Only after you can answer “yes” to each item should you point the configuration
-at `https://api.alpaca.markets` and trade with real capital.
-
-## Getting started
-
-1. Create a virtual environment and install the dependencies:
-
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
-   ```
-
-2. Export your [Alpaca API credentials](https://docs.alpaca.markets/reference/api-overview):
-
-   ```bash
-   export APCA_API_KEY_ID="your-key"
-   export APCA_API_SECRET_KEY="your-secret"
-   export APCA_API_BASE_URL="https://paper-api.alpaca.markets"
-   ```
-
-3. Run the trading loop:
-
-   ```bash
-    python scripts/run_open_close.py \
-        --symbols "SPY,QQQ" \
-        --qty 5 \
-        --direction long
-   ```
-
-   Key runtime features:
-
-   * **Countdown timers** – every poll logs the wall-clock time, whether the
-     market is open, and the HH:MM:SS countdown to the next opening/closing
-     bell.
-   * **Live ticker stream** – a background websocket connection subscribes to
-     the configured symbols and surfaces a rolling snapshot of the latest trade
-     prices and sizes. Use `--disable-data-stream` to turn it off or
-     `--data-feed sip` to switch providers.
-   * **Autonomous execution** – when the countdown reaches the opening bell the
-     engine cancels lingering orders, enters the configured strategy positions
-     (long or short), and automatically exits at the close.
-   * **Strategy hot-swapping** – pass a custom implementation via
-     `--strategy module.path:ClassName` and any strategy-specific keyword args
-     through `--direction` or by editing the script; everything else (clock
-     monitoring, countdowns, graceful shutdown) stays the same.
+1. **Paper trade until boring**: validate countdown alignment and order flow against the paper endpoint first.
+2. **Confirm credentials**: `health-check` should pass and `account.status` should be `ACTIVE` (paper) or `APPROVED` (live).
+3. **Validate symbol list and sizing**: ensure symbols are tradable for your account and `--qty` keeps exposure within your limits.
+4. **Exercise the data stream**: toggle `--disable-data-stream` to confirm websocket stability and resource usage.
+5. **Rehearse failures**: interrupt the process and restore it to confirm idempotent cleanup and backoff behavior.
+6. **Log and review**: inspect `logs/trades.csv` and `logs/app.log` after a dry run.
 
 ## Customising the strategy
 
-The intent is to make tinkering safe and easy:
+- Edit `alpaca_trader/universe.py` to change the default watchlist or override via `--symbols` at runtime.
+- Adjust `TRADER_QTY` in `alpaca_trader/config.py` or pass `--qty` for ad-hoc sizing.
+- Add new strategies under `alpaca_trader/strategies/` and select them with `--strategy module.path:ClassName`.
+- Reuse `alpaca_trader.data_stream.LiveTickerFeed` for streaming signals and `alpaca_trader.engine.run_open_close_loop` for countdown orchestration.
 
-* Update `alpaca_trader/universe.py` with your preferred list of symbols or pass
-  `--symbols` at runtime for ad-hoc scans.
-* Override `TRADER_QTY`, pass `--qty`, or inject sizing logic inside your
-  strategy class.
-* Drop new files under `alpaca_trader/strategies/` and select them with the
-  `--strategy` flag (the loader understands `package.module:ClassName`).
-* Build more advanced executions by reusing `alpaca_trader.data_stream` for
-  streaming signals and `alpaca_trader.engine` for the countdown/loop plumbing.
+## Roadmap
 
-Because everything is kept intentionally small you can follow the code in a
-single sitting before making it your own.
-
-## Roadmap: from sandbox to broad deployment
-
-The starter loop is intentionally lightweight so you can understand each part.
-To turn it into a production-grade, widely deployed system, progress through
-these milestones:
-
-1. **Reliability hardening** – add automated tests for the countdown/strategy
-   orchestration, implement structured logging, and gate merges with CI to keep
-   the event loop stable as new strategies are added.
-2. **Configuration & secrets management** – switch from shell-exported
-   environment variables to a centralized config/secrets store (e.g., AWS
-   Parameter Store, Vault) and introduce tiered config files for paper vs.
-   live trading venues.
-3. **Observability & alerting** – ship logs/metrics/traces to a managed stack
-   (CloudWatch, Grafana, etc.), expose heartbeat dashboards for countdowns,
-   position states, and order latencies, and set up alerts on disconnects or
-   rule breaches.
-4. **Strategy lifecycle tooling** – define a registry for strategies with
-   versioning, feature flags, and A/B rollout controls so you can hot-swap or
-   canary new logic without restarting the service.
-5. **Risk, compliance, and controls** – codify position limits, circuit
-   breakers, and compliance checks (short locate, PDT rules, concentration
-   limits) plus audit logs for all orders.
-6. **Scaling infrastructure** – containerize the trader, deploy it through an
-   orchestration layer (ECS/Kubernetes) with redundancy across regions/accounts,
-   and front it with a job scheduler or control plane that can coordinate
-   multiple symbol clusters.
-7. **Data & model enrichment** – plug in higher-quality feeds (SIP, alt data),
-   manage historical datasets for simulation, and add feature pipelines so more
-   advanced strategies can share normalized inputs.
-
-Each milestone keeps the existing architecture intact while layering the
-operational guardrails, tooling, and scalability needed for a broader rollout.
+See `CODEX_BRIEF.md` and `CHATGPT_SUMMARY.md` for the broader strategy, risk, backtesting, and observability roadmap.

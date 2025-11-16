@@ -72,25 +72,32 @@ def run_open_close_loop(
         "on" if feed else "off",
     )
 
+    failure_sleep = 5
+    max_backoff = max(interval, 60)
+
     with _graceful_shutdown() as shutdown:
         while not shutdown["value"]:
             try:
                 clock = trading_client.get_clock()
-            except Exception:  # pragma: no cover - network dependent
-                LOGGER.exception("Failed to fetch market clock; retrying")
+                _log_clock_countdown(clock)
+                _log_data_snapshot(feed)
+
+                if strategy.should_open(clock):
+                    LOGGER.info("Signal: open positions")
+                    trading_client.cancel_all_orders()
+                    strategy.enter_positions()
+                elif strategy.should_close(clock):
+                    LOGGER.info("Signal: close positions")
+                    strategy.exit_positions()
+
+                failure_sleep = 5
                 time.sleep(interval)
-                continue
-
-            _log_clock_countdown(clock)
-            _log_data_snapshot(feed)
-
-            if strategy.should_open(clock):
-                trading_client.cancel_all_orders()
-                strategy.enter_positions()
-            elif strategy.should_close(clock):
-                strategy.exit_positions()
-
-            time.sleep(interval)
+            except Exception as exc:  # pragma: no cover - network dependent
+                LOGGER.exception("Engine loop failure; backing off")
+                time.sleep(failure_sleep)
+                failure_sleep = min(failure_sleep * 2, max_backoff)
+                if isinstance(exc, KeyboardInterrupt):
+                    break
 
     if feed:
         feed.stop()
