@@ -112,7 +112,7 @@ Confirms required environment variables, Alpaca account status, and fetches the 
 python -m alpaca_trader.cli events trades --max-events 5
 ```
 
-Streams broker SSE channels (e.g., `trades`, `journal`, `transfers`, `account`) with automatic heartbeat handling, backoff/reconnect, and optional ULID offsets via `--since-ulid`/`--until-ulid`. Use this to monitor order events or resubscribe from a prior cursor without missing messages.
+Streams broker SSE channels (e.g., `trades`, `journal`, `transfers`, `account`) with automatic heartbeat handling, backoff/reconnect, and resume controls. Start from a prior cursor using `--since-ulid` or `--since` (RFC3339 timestamp or integer id) and bound the stream with `--until-ulid`/`--until` when you need a finite replay window.
 
 ### Dashboard
 

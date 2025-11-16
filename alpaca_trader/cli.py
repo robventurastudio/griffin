@@ -72,6 +72,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     events.add_argument("--since-ulid", help="Resume from this ULID or ID")
     events.add_argument("--until-ulid", help="Stop after reaching this ULID or ID")
+    events.add_argument("--since", help="Resume from RFC3339 timestamp or integer id")
+    events.add_argument("--until", help="Stop after RFC3339 timestamp or integer id")
     events.add_argument("--max-events", type=int, help="Stop after N events")
     events.set_defaults(handler=_handle_events)
 
@@ -174,6 +176,8 @@ def _handle_events(args: argparse.Namespace) -> int:
             args.event_type,
             since_ulid=args.since_ulid,
             until_ulid=args.until_ulid,
+            since=args.since,
+            until=args.until,
             on_event=_on_event,
             stop_event=stop,
         )

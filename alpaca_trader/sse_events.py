@@ -13,7 +13,8 @@ import logging
 import os
 import threading
 import time
-from typing import Callable, Dict, Optional
+from datetime import datetime
+from typing import Callable, Dict, Optional, Union
 
 import requests
 
@@ -33,12 +34,16 @@ class SSEEventClient:
         events_base_url: Optional[str] = None,
         api_version: str = "v1",
         request_timeout: int = 30,
+        backoff_initial: int = 5,
+        backoff_max: int = 60,
     ) -> None:
         self._key_id = key_id or _require_env("APCA_API_KEY_ID")
         self._secret_key = secret_key or _require_env("APCA_API_SECRET_KEY")
         self._base_url = _resolve_events_base(events_base_url)
         self._api_version = api_version.strip("/")
         self._request_timeout = request_timeout
+        self._backoff_initial = backoff_initial
+        self._backoff_max = backoff_max
 
     def stream_events(
         self,
@@ -46,6 +51,8 @@ class SSEEventClient:
         *,
         since_ulid: Optional[str] = None,
         until_ulid: Optional[str] = None,
+        since: Optional[Union[str, datetime]] = None,
+        until: Optional[Union[str, datetime]] = None,
         on_event: Optional[JsonCallback] = None,
         stop_event: Optional[threading.Event] = None,
         heartbeat_timeout: int = 90,
@@ -57,14 +64,15 @@ class SSEEventClient:
         caller raises out of the callback.
         """
 
-        last_seen = since_ulid
-        backoff = 5
+        last_ulid = since_ulid
+        last_cursor: Optional[str] = _normalize_since(since)
+        backoff = self._backoff_initial
         session = requests.Session()
 
         while not (stop_event and stop_event.is_set()):
             url = f"{self._base_url}/{self._api_version}/events/{event_type}"
-            params = _build_params(last_seen, until_ulid)
-            LOGGER.info("Connecting to SSE %s", url)
+            params = _build_params(last_ulid, until_ulid, last_cursor, _normalize_since(until))
+            LOGGER.info("Connecting to SSE %s with params %s", url, params)
 
             try:
                 with session.get(
@@ -75,7 +83,7 @@ class SSEEventClient:
                     timeout=self._request_timeout,
                 ) as resp:
                     resp.raise_for_status()
-                    backoff = 5
+                    backoff = self._backoff_initial
                     last_heartbeat = time.monotonic()
 
                     for payload in _iter_sse_events(resp):
@@ -91,7 +99,8 @@ class SSEEventClient:
                             LOGGER.debug("Heartbeat from SSE stream")
                             continue
 
-                        last_seen = payload.get("event_ulid") or payload.get("event_id") or last_seen
+                        last_ulid = payload.get("event_ulid") or last_ulid
+                        last_cursor = payload.get("event_id") or last_cursor
                         if on_event:
                             on_event(payload)
 
@@ -101,11 +110,11 @@ class SSEEventClient:
             except Exception:
                 LOGGER.exception("SSE stream error; reconnecting after %ss", backoff)
                 time.sleep(backoff)
-                backoff = min(backoff * 2, 60)
+                backoff = min(backoff * 2, self._backoff_max)
             else:
                 LOGGER.info("SSE stream ended; reconnecting after %ss", backoff)
                 time.sleep(backoff)
-                backoff = min(backoff * 2, 60)
+                backoff = min(backoff * 2, self._backoff_max)
 
         session.close()
 
@@ -132,11 +141,18 @@ def _iter_sse_events(response: requests.Response):
 
         if line.startswith(":"):
             comment = line.lstrip(":").strip()
-            if comment:
-                if "heartbeat" in comment.lower():
-                    yield {"type": "heartbeat", "comment": comment}
-                else:
-                    LOGGER.debug("SSE comment: %s", comment)
+            if not comment:
+                continue
+            lowered = comment.lower()
+            if "heartbeat" in lowered:
+                yield {"type": "heartbeat", "comment": comment}
+            elif "internal server error" in lowered:
+                LOGGER.warning("SSE server reported internal error: %s", comment)
+                yield {"type": "server_error", "comment": comment}
+            elif "reading too slowly" in lowered:
+                LOGGER.warning("SSE server signaled slow client: %s", comment)
+            else:
+                LOGGER.debug("SSE comment: %s", comment)
             continue
 
         if line.startswith("id:"):
@@ -177,16 +193,40 @@ def _assemble_payload(data_lines, event_id: Optional[str], event_type: Optional[
 
 
 def _auth_headers(key_id: str, secret_key: str) -> Dict[str, str]:
-    return {"APCA-API-KEY-ID": key_id, "APCA-API-SECRET-KEY": secret_key}
+    return {
+        "Accept": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "APCA-API-KEY-ID": key_id,
+        "APCA-API-SECRET-KEY": secret_key,
+    }
 
 
-def _build_params(since_ulid: Optional[str], until_ulid: Optional[str]) -> Dict[str, str]:
+def _build_params(
+    since_ulid: Optional[str],
+    until_ulid: Optional[str],
+    since: Optional[str],
+    until: Optional[str],
+) -> Dict[str, str]:
     params: Dict[str, str] = {}
     if since_ulid:
         params["since_ulid"] = since_ulid
+    elif since:
+        params["since"] = since
+
     if until_ulid:
         params["until_ulid"] = until_ulid
+    elif until:
+        params["until"] = until
     return params
+
+
+def _normalize_since(value: Optional[Union[str, datetime]]) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        # RFC3339 formatting; ensure timezone awareness if provided
+        return value.isoformat()
+    return str(value)
 
 
 def _resolve_events_base(events_base_url: Optional[str]) -> str:
