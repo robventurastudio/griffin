@@ -11,9 +11,11 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from .alpaca_client import AlpacaClient
+from .backtester import Backtester
 from .config import POLL_INTERVAL_SECONDS, TRADER_QTY
 from .engine import run_open_close_loop
 from .logging_setup import APP_LOG_PATH, configure_logging, ensure_log_dir
+from .risk_manager import RiskLimits
 from .sse_events import SSEEventClient
 from .universe import DEFAULT_UNIVERSE
 
@@ -48,6 +50,9 @@ def _build_parser() -> argparse.ArgumentParser:
     trade.add_argument("--disable-data-stream", action="store_true", help="Disable websocket feed")
     trade.add_argument("--strategy", help="Strategy path module:Class")
     trade.add_argument("--poll-interval", type=int, default=POLL_INTERVAL_SECONDS)
+    trade.add_argument("--max-position-dollars", type=float, default=2000.0, help="Per-symbol exposure cap")
+    trade.add_argument("--daily-loss-limit-pct", type=float, default=0.05, help="Stop trading after this drawdown")
+    trade.add_argument("--fixed-stop-pct", type=float, default=0.01, help="Fallback stop pct when ATR missing")
     trade.set_defaults(handler=_handle_trade)
 
     status = subparsers.add_parser("status", help="Show market and position status")
@@ -64,6 +69,13 @@ def _build_parser() -> argparse.ArgumentParser:
     dashboard.add_argument("--host", default="127.0.0.1")
     dashboard.add_argument("--port", type=int, default=8000)
     dashboard.set_defaults(handler=_handle_dashboard)
+
+    backtest = subparsers.add_parser("backtest", help="Run a historical backtest")
+    backtest.add_argument("data_path", help="CSV or Parquet file with OHLCV data")
+    backtest.add_argument("--strategy", required=True, help="Strategy module:Class path")
+    backtest.add_argument("--starting-cash", type=float, default=100000.0)
+    backtest.add_argument("--symbols", help="Optional comma-separated symbol filter")
+    backtest.set_defaults(handler=_handle_backtest)
 
     events = subparsers.add_parser("events", help="Stream SSE broker events to stdout")
     events.add_argument(
@@ -87,6 +99,11 @@ def _build_parser() -> argparse.ArgumentParser:
 def _handle_trade(args: argparse.Namespace) -> int:
     symbols = _parse_symbols(args.symbols) if args.symbols else DEFAULT_UNIVERSE
     LOGGER.info("Launching trade loop for %s symbols", len(symbols))
+    risk_limits = RiskLimits(
+        max_position_dollars=args.max_position_dollars,
+        daily_loss_limit_pct=args.daily_loss_limit_pct,
+        fixed_stop_pct=args.fixed_stop_pct,
+    )
     run_open_close_loop(
         universe=symbols,
         qty=args.qty,
@@ -94,6 +111,7 @@ def _handle_trade(args: argparse.Namespace) -> int:
         enable_data_stream=not args.disable_data_stream,
         strategy_kwargs={"direction": args.direction},
         poll_interval=args.poll_interval,
+        risk_limits=risk_limits,
     )
     return 0
 
@@ -157,6 +175,23 @@ def _handle_dashboard(args: argparse.Namespace) -> int:
     from . import dashboard
 
     return dashboard.run(host=args.host, port=args.port)
+
+
+def _handle_backtest(args: argparse.Namespace) -> int:
+    symbols = _parse_symbols(args.symbols) if args.symbols else None
+    bt = Backtester(
+        data_path=args.data_path,
+        strategy_path=args.strategy,
+        universe=symbols,
+        starting_cash=args.starting_cash,
+    )
+    result = bt.run()
+    print("Backtest complete")
+    print(f"Final equity: {result.metrics.get('final_equity'):.2f}")
+    print(f"Net return: {result.metrics.get('net_return'):.2%}")
+    print(f"Win rate: {result.metrics.get('win_rate'):.2%}")
+    print(f"Max drawdown: {result.metrics.get('max_drawdown'):.2%}")
+    return 0
 
 
 def _handle_events(args: argparse.Namespace) -> int:

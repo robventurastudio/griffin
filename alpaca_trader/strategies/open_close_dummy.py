@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Iterable, Sequence
+from typing import Iterable, Optional, Sequence
 
 from ..universe import DEFAULT_UNIVERSE
 
@@ -27,6 +27,7 @@ class OpenCloseStrategy:
     qty: int = 1
     positions_open: bool = False
     direction: str = "long"
+    risk_manager: Optional["RiskManager"] = None
 
     def __post_init__(self) -> None:
         self.universe = [symbol.upper() for symbol in self.universe]
@@ -83,4 +84,19 @@ class OpenCloseStrategy:
     # ------------------------------------------------------------------
     def _submit_bulk_orders(self, symbols: Iterable[str], *, side: str) -> None:
         for symbol in symbols:
-            self.client.submit_market_order(symbol=symbol, qty=self.qty, side=side)
+            price = None
+            try:
+                trade = self.client.get_latest_trade(symbol)
+                price = getattr(trade, "price", None)
+            except Exception:  # pragma: no cover
+                LOGGER.debug("Unable to fetch latest trade for %s", symbol)
+
+            qty = self.qty
+            if self.risk_manager and price:
+                qty = self.risk_manager.size_order(symbol=symbol, price=float(price)) or 0
+                if qty and not self.risk_manager.validate_order(symbol=symbol, side=side, price=float(price), qty=qty):
+                    qty = 0
+            if qty <= 0:
+                LOGGER.info("Risk rules skipped %s order for %s", side, symbol)
+                continue
+            self.client.submit_market_order(symbol=symbol, qty=qty, side=side)

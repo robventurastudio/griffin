@@ -13,6 +13,8 @@ from typing import Iterable, Optional, Type
 from .alpaca_client import AlpacaClient
 from .config import POLL_INTERVAL_SECONDS, TRADER_QTY
 from .data_stream import LiveTickerFeed
+from .logging_setup import append_pnl_log
+from .risk_manager import RiskLimits, RiskManager
 from .strategies.open_close_dummy import OpenCloseStrategy
 from .universe import DEFAULT_UNIVERSE
 
@@ -46,16 +48,20 @@ def run_open_close_loop(
     enable_data_stream: bool = True,
     data_feed: str = "iex",
     strategy_kwargs: Optional[dict] = None,
+    risk_limits: Optional[RiskLimits] = None,
+    risk_manager: Optional[RiskManager] = None,
 ) -> None:
     """Continuously monitor the Alpaca clock and trade the configured strategy."""
 
     trading_client = client or AlpacaClient()
+    rm = risk_manager or RiskManager(trading_client, limits=risk_limits)
     strategy_cls = _resolve_strategy(strategy_path)
     strategy_options = dict(strategy_kwargs or {})
     strategy = strategy_cls(
         trading_client,
         universe=list(universe or DEFAULT_UNIVERSE),
         qty=qty or TRADER_QTY,
+        risk_manager=rm,
         **strategy_options,
     )
     strategy.bootstrap_state()
@@ -74,6 +80,7 @@ def run_open_close_loop(
 
     failure_sleep = 5
     max_backoff = max(interval, 60)
+    last_pnl_date = None
 
     with _graceful_shutdown() as shutdown:
         while not shutdown["value"]:
@@ -81,6 +88,17 @@ def run_open_close_loop(
                 clock = trading_client.get_clock()
                 _log_clock_countdown(clock)
                 _log_data_snapshot(feed)
+                last_pnl_date = _maybe_record_pnl(trading_client, last_pnl_date)
+
+                if rm.daily_loss_exceeded():
+                    LOGGER.warning("Risk lockout active; pausing submissions until recovery")
+                    time.sleep(interval)
+                    continue
+
+                symbol_state = _build_symbol_state(trading_client, strategy.universe, feed)
+
+                if hasattr(strategy, "on_tick"):
+                    strategy.on_tick(clock, symbol_state)
 
                 if strategy.should_open(clock):
                     LOGGER.info("Signal: open positions")
@@ -194,3 +212,44 @@ def _format_delta(delta: timedelta) -> str:
     hours, remainder = divmod(seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def _maybe_record_pnl(client: AlpacaClient, last_date) -> datetime.date:
+    try:
+        now = datetime.utcnow().date()
+        if last_date == now:
+            return last_date
+        account = client.get_account()
+        equity = float(getattr(account, "equity", 0.0) or 0.0)
+        cash = float(getattr(account, "cash", 0.0) or 0.0)
+        portfolio_value = float(getattr(account, "portfolio_value", equity))
+        append_pnl_log(date=str(now), equity=equity, cash=cash, portfolio_value=portfolio_value)
+        LOGGER.info("Recorded daily PnL snapshot (equity=%.2f, cash=%.2f)", equity, cash)
+        return now
+    except Exception:  # pragma: no cover - network path
+        LOGGER.exception("Failed to record PnL snapshot")
+        return last_date
+
+
+def _build_symbol_state(client: AlpacaClient, universe, feed: Optional[LiveTickerFeed]):
+    state = {}
+    positions = {}
+    try:
+        for pos in client.list_positions():
+            positions[pos.symbol.upper()] = {
+                "qty": float(getattr(pos, "qty", 0) or 0),
+                "entry_price": float(getattr(pos, "avg_entry_price", 0.0) or 0.0),
+            }
+    except Exception:  # pragma: no cover
+        LOGGER.exception("Unable to fetch positions for symbol state")
+
+    prices = feed.snapshot() if feed else {}
+    for symbol in universe:
+        last = prices.get(symbol, {}) if prices else {}
+        state[symbol] = {
+            "last_price": last.get("price"),
+            "last_size": last.get("size"),
+        }
+        if symbol in positions:
+            state[symbol].update(positions[symbol])
+    return state

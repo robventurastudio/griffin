@@ -13,9 +13,12 @@ This repository is a minimal but production-minded retail trading playground for
 │   ├── data_stream.py      # live trade feed helper
 │   ├── dashboard.py        # FastAPI-powered local dashboard
 │   ├── engine.py           # orchestrates the strategy loop & countdowns
-│   ├── logging_setup.py    # rotating log configuration + trade CSV writer
+│   ├── logging_setup.py    # rotating log configuration + trade/PnL CSV writers
+│   ├── backtester.py       # lightweight bar-by-bar backtester
+│   ├── risk_manager.py     # simple exposure and drawdown guardrails
 │   ├── strategies/
-│   │   └── open_close_dummy.py
+│   │   ├── open_close_dummy.py
+│   │   └── orb.py          # Opening Range Breakout strategy
 │   └── universe.py         # list of symbols to trade
 ├── scripts/
 │   ├── run_open_close.py   # legacy entrypoint -> delegates to CLI
@@ -81,6 +84,22 @@ Flags:
 - `--disable-data-stream`: skip the websocket feed.
 - `--strategy`: custom strategy path in `module:Class` format.
 - `--poll-interval`: seconds between clock polls (defaults to `POLL_INTERVAL_SECONDS`).
+- `--max-position-dollars`, `--daily-loss-limit-pct`, `--fixed-stop-pct`: basic risk guardrails enforced before orders are placed.
+
+#### Strategy options
+
+- **Open/close baseline**: `alpaca_trader.strategies.open_close_dummy:OpenCloseStrategy` (default), trades the configured universe at the bell.
+- **Opening Range Breakout (ORB)**: `alpaca_trader.strategies.orb:OpeningRangeBreakout` supports 5m ranges, volume filters, long/short triggers, and optional sizing via the risk manager.
+
+Example ORB run:
+
+```bash
+python -m alpaca_trader.cli trade \
+  --strategy alpaca_trader.strategies.orb:OpeningRangeBreakout \
+  --symbols "SPY,QQQ" \
+  --direction both \
+  --max-position-dollars 1500
+```
 
 ### Status
 
@@ -122,6 +141,15 @@ python -m alpaca_trader.cli dashboard --port 8000
 
 Starts a local-only FastAPI dashboard at `http://127.0.0.1:8000` showing current time/countdown, universe, positions, recent trades (`logs/trades.csv`), and a tail of the application log.
 
+### Backtest
+
+```bash
+python -m alpaca_trader.cli backtest /path/to/bars.parquet --strategy alpaca_trader.strategies.orb:OpeningRangeBreakout
+```
+
+Replays CSV/Parquet OHLCV data through any strategy exposing `on_bar`, logs simulated fills, and reports summary metrics
+(final equity, net return, win rate, drawdown). Use `--symbols` to filter the universe and `--starting-cash` to change the cash balance.
+
 ## Logging & observability
 
 Logging is configured via `alpaca_trader/logging_setup.py` and kicks in as soon as the CLI starts:
@@ -129,6 +157,7 @@ Logging is configured via `alpaca_trader/logging_setup.py` and kicks in as soon 
 - `logs/app.log`: main application log (rotates daily).
 - `logs/errors.log`: errors/exceptions (rotates daily).
 - `logs/trades.csv`: append-only trade log capturing order submissions.
+- `logs/pnl.csv`: once-per-day equity snapshot to monitor PnL drift.
 
 The logs directory is created automatically. Secrets are never logged; missing env vars are reported by name only. Use `scripts/rotate_logs.py` to prune old files (`--days` flag, defaults to 7).
 

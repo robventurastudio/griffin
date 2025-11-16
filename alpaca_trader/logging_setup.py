@@ -11,6 +11,7 @@ from typing import Optional
 APP_LOG_PATH = Path("logs/app.log")
 ERROR_LOG_PATH = Path("logs/errors.log")
 TRADES_LOG_PATH = Path("logs/trades.csv")
+PNL_LOG_PATH = Path("logs/pnl.csv")
 
 
 def ensure_log_dir() -> None:
@@ -86,6 +87,25 @@ def append_trade_log(
                 "price": price if price is not None else "",
                 "order_id": order_id or "",
                 "status": status or "",
+            }
+        )
+
+
+def append_pnl_log(*, date: str, equity: float, cash: float, portfolio_value: float) -> None:
+    """Append a daily PnL snapshot to ``logs/pnl.csv``."""
+
+    ensure_log_dir()
+    file_exists = PNL_LOG_PATH.exists()
+    with PNL_LOG_PATH.open("a", newline="") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=["date", "equity", "cash", "portfolio_value"])
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(
+            {
+                "date": date,
+                "equity": f"{equity:.2f}",
+                "cash": f"{cash:.2f}",
+                "portfolio_value": f"{portfolio_value:.2f}",
             }
         )
 

@@ -60,6 +60,16 @@ class AlpacaClient:
 
         return self._rest.get_latest_bar(symbol, feed=feed)
 
+    def get_latest_trade(self, symbol: str, *, feed: str = "iex"):
+        """Return the latest trade for ``symbol`` using the configured feed."""
+
+        return self._rest.get_latest_trade(symbol, feed=feed)
+
+    def get_bars(self, symbol: str, timeframe: str, *, start, end=None, limit: int = 500, feed: str = "iex"):
+        """Fetch historical bars for ``symbol`` within the provided window."""
+
+        return self._rest.get_bars(symbol, timeframe, start=start, end=end, limit=limit, feed=feed)
+
     def list_positions(self):
         """Return all currently-open positions in the account."""
 
