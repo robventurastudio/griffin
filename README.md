@@ -42,6 +42,8 @@ This repository is a minimal but production-minded retail trading playground for
    export APCA_API_KEY_ID="your-key"
    export APCA_API_SECRET_KEY="your-secret"
    export APCA_API_BASE_URL="https://paper-api.alpaca.markets"
+   # Optional: override the broker events base if provided by Alpaca
+   # export APCA_EVENTS_BASE_URL="https://paper-api.alpaca.markets/events"
    ```
 
 3. **Verify connectivity**
@@ -103,6 +105,14 @@ python -m alpaca_trader.cli health-check
 ```
 
 Confirms required environment variables, Alpaca account status, and fetches the latest bar for the default universe to ensure data access. Returns non-zero on failure.
+
+### Events (SSE)
+
+```bash
+python -m alpaca_trader.cli events trades --max-events 5
+```
+
+Streams broker SSE channels (e.g., `trades`, `journal`, `transfers`, `account`) with automatic heartbeat handling, backoff/reconnect, and optional ULID offsets via `--since-ulid`/`--until-ulid`. Use this to monitor order events or resubscribe from a prior cursor without missing messages.
 
 ### Dashboard
 

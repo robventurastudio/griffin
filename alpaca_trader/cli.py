@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
+import threading
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -12,6 +14,7 @@ from .alpaca_client import AlpacaClient
 from .config import POLL_INTERVAL_SECONDS, TRADER_QTY
 from .engine import run_open_close_loop
 from .logging_setup import APP_LOG_PATH, configure_logging, ensure_log_dir
+from .sse_events import SSEEventClient
 from .universe import DEFAULT_UNIVERSE
 
 LOGGER = logging.getLogger("alpaca_trader.cli")
@@ -61,6 +64,16 @@ def _build_parser() -> argparse.ArgumentParser:
     dashboard.add_argument("--host", default="127.0.0.1")
     dashboard.add_argument("--port", type=int, default=8000)
     dashboard.set_defaults(handler=_handle_dashboard)
+
+    events = subparsers.add_parser("events", help="Stream SSE broker events to stdout")
+    events.add_argument(
+        "event_type",
+        help="Event channel, e.g. trades, journal, transfers, account",
+    )
+    events.add_argument("--since-ulid", help="Resume from this ULID or ID")
+    events.add_argument("--until-ulid", help="Stop after reaching this ULID or ID")
+    events.add_argument("--max-events", type=int, help="Stop after N events")
+    events.set_defaults(handler=_handle_events)
 
     return parser
 
@@ -142,6 +155,32 @@ def _handle_dashboard(args: argparse.Namespace) -> int:
     from . import dashboard
 
     return dashboard.run(host=args.host, port=args.port)
+
+
+def _handle_events(args: argparse.Namespace) -> int:
+    stop = threading.Event()
+    client = SSEEventClient()
+    count = 0
+
+    def _on_event(payload):
+        nonlocal count
+        count += 1
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        if args.max_events and count >= args.max_events:
+            stop.set()
+
+    try:
+        client.stream_events(
+            args.event_type,
+            since_ulid=args.since_ulid,
+            until_ulid=args.until_ulid,
+            on_event=_on_event,
+            stop_event=stop,
+        )
+    except KeyboardInterrupt:  # pragma: no cover - manual interrupt
+        LOGGER.info("SSE stream interrupted by user")
+        return 130
+    return 0
 
 
 # ---------------------------------------------------------------------------
