@@ -1,2 +1,6 @@
-from alpaca_trader.engine import run_open_close_loop
-if __name__=='__main__': run_open_close_loop()
+"""Backward-compatible entrypoint that delegates to the new CLI."""
+
+from alpaca_trader.cli import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())
