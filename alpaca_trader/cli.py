@@ -58,6 +58,9 @@ def _handle_trade(args: argparse.Namespace) -> int:
     symbols = _parse_symbols(args.symbols)
     LOG.info("Starting trade loop for symbols: %s", ",".join(symbols))
 
+    # The multi-line call below intentionally keeps every keyword on its own
+    # line to avoid merge-conflict artifacts that previously led to a
+    # "SyntaxError: '(' was never closed" in user environments.
     run_trading_session(
         symbols=symbols,
         base_qty=args.qty,
