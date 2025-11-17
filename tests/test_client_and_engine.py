@@ -101,6 +101,9 @@ class RunOpenCloseScriptTest(unittest.TestCase):
             with self.assertRaises(ImportError):
                 spec.loader.exec_module(module)
 
+        finally:
+            sys.path = original_path
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,5 @@
 """Engine helpers with timezone-safe formatting and a minimal trading loop."""
+"""Engine helpers with timezone-safe formatting and clock reporting."""
 from __future__ import annotations
 
 import datetime as dt
@@ -6,6 +7,7 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Optional
 
 from dateutil import parser
 
@@ -100,18 +102,30 @@ class OpenCloseMarketStrategy:
 # Time helpers -------------------------------------------------------------
 
 def _ensure_timezone(dt_obj: dt.datetime) -> dt.datetime:
+def _ensure_timezone(dt_obj: dt.datetime) -> dt.datetime:
+    """Ensure the datetime is timezone-aware in UTC."""
+
     if dt_obj.tzinfo is None:
         return dt_obj.replace(tzinfo=dt.timezone.utc)
     return dt_obj.astimezone(dt.timezone.utc)
 
 
 def _ensure_datetime(value: Any) -> dt.datetime:
+    """Convert value to a timezone-aware UTC datetime.
+
+    Handles standard ``datetime`` instances, ISO8601 strings, and pandas
+    ``Timestamp`` objects without triggering the pandas ``tz_convert`` bug
+    encountered when ``astimezone`` was called with no arguments.
+    """
+
     if value is None:
         raise ValueError("Cannot format a missing datetime value")
 
     if isinstance(value, str):
         value = parser.isoparse(value)
 
+    # pandas.Timestamp implements ``to_pydatetime``; convert early to avoid
+    # invoking its ``astimezone`` override which raised during the dry run.
     to_py_dt = getattr(value, "to_pydatetime", None)
     if callable(to_py_dt):
         value = to_py_dt()
@@ -123,6 +137,8 @@ def _ensure_datetime(value: Any) -> dt.datetime:
 
 
 def fmt_datetime(value: Any) -> str:
+    """Format datetime-like values safely for logs."""
+
     normalized = _ensure_datetime(value)
     return normalized.strftime("%Y-%m-%d %H:%M:%S %Z")
 
@@ -136,6 +152,8 @@ def _get_clock_field(clock: Any, field: str) -> Any:
 
 
 def log_clock(clock: Optional[dict]) -> str:
+    """Render a stable clock status message for Alpaca `Clock` payloads."""
+
     if not clock:
         return "(clock unavailable)"
 
@@ -191,6 +209,14 @@ def run_open_close_loop(
     client=None,
     **_: Any,
 ) -> None:
+    """Continuously log Alpaca market clock status with safe timezone handling.
+
+    Accepts a broad set of keyword arguments so calls from older CLI entrypoints
+    (e.g., ``run_open_close_loop(universe=..., qty=..., strategy=...)``) do not
+    raise ``TypeError``. All parameters other than ``poll_seconds`` and
+    ``client`` are ignored because this helper only monitors the market clock.
+    """
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
     from alpaca_trader.alpaca_client import AlpacaClient  # imported lazily
