@@ -1,10 +1,23 @@
-"""Minimal engine helpers with timezone-safe formatting."""
+"""Engine helpers with timezone-safe formatting and clock reporting."""
 from __future__ import annotations
 
 import datetime as dt
+import logging
+import time
 from typing import Any, Optional
 
 from dateutil import parser
+
+
+LOG = logging.getLogger(__name__)
+
+
+def _ensure_timezone(dt_obj: dt.datetime) -> dt.datetime:
+    """Ensure the datetime is timezone-aware in UTC."""
+
+    if dt_obj.tzinfo is None:
+        return dt_obj.replace(tzinfo=dt.timezone.utc)
+    return dt_obj.astimezone(dt.timezone.utc)
 
 
 def _ensure_datetime(value: Any) -> dt.datetime:
@@ -30,12 +43,7 @@ def _ensure_datetime(value: Any) -> dt.datetime:
     if not isinstance(value, dt.datetime):
         raise TypeError(f"Unsupported datetime type: {type(value)}")
 
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=dt.timezone.utc)
-    else:
-        value = value.astimezone(dt.timezone.utc)
-
-    return value
+    return _ensure_timezone(value)
 
 
 def fmt_datetime(value: Any) -> str:
@@ -45,32 +53,62 @@ def fmt_datetime(value: Any) -> str:
     return normalized.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
+def _get_clock_field(clock: Any, field: str) -> Any:
+    if clock is None:
+        return None
+    if isinstance(clock, dict):
+        return clock.get(field)
+    return getattr(clock, field, None)
+
+
 def log_clock(clock: Optional[dict]) -> str:
-    """Render a stable clock status message.
-
-    ``clock`` is expected to look like the Alpaca clock payload, e.g.::
-
-        {"timestamp": "2024-01-01T13:00:00Z", "is_open": True}
-    """
+    """Render a stable clock status message for Alpaca `Clock` payloads."""
 
     if not clock:
         return "(clock unavailable)"
 
-    timestamp = clock.get("timestamp") or clock.get("next_open") or clock.get("next_close")
-    return f"Market clock: {fmt_datetime(timestamp)} (open={clock.get('is_open')})"
+    timestamp = (
+        _get_clock_field(clock, "timestamp")
+        or _get_clock_field(clock, "next_open")
+        or _get_clock_field(clock, "next_close")
+    )
+    is_open = _get_clock_field(clock, "is_open")
+    next_open = _get_clock_field(clock, "next_open")
+    next_close = _get_clock_field(clock, "next_close")
+
+    parts = [f"now={fmt_datetime(timestamp)}"]
+    if next_open:
+        parts.append(f"next_open={fmt_datetime(next_open)}")
+    if next_close:
+        parts.append(f"next_close={fmt_datetime(next_close)}")
+
+    return f"Market clock ({'open' if is_open else 'closed'}): " + " | ".join(parts)
 
 
 def run_open_close_loop() -> None:
-    """Placeholder loop that demonstrates timezone-safe logging.
+    """Continuously log Alpaca market clock status with safe timezone handling.
 
-    The original dry run surfaced a pandas ``tz_convert`` issue when we attempted
-    to format the market clock. This helper keeps the loop simple while ensuring
-    any datetime values are normalized before logging.
+    This loop is intentionally lightweight so it can be used as a smoke test
+    during setup: it fetches the current clock, logs the relevant timestamps,
+    waits, and repeats. KeyboardInterrupt will stop the loop.
     """
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
     from alpaca_trader.alpaca_client import AlpacaClient  # imported lazily
 
     client = AlpacaClient()
-    clock = client.get_clock()
-    message = log_clock(clock)
-    print(message)
+    poll_seconds = 30
+    LOG.info("Starting open/close loop (poll=%ss)", poll_seconds)
+
+    try:
+        while True:
+            try:
+                clock = client.get_clock()
+                LOG.info(log_clock(clock))
+            except Exception:
+                LOG.exception("Failed to fetch or format market clock")
+
+            time.sleep(poll_seconds)
+    except KeyboardInterrupt:
+        LOG.info("Open/close loop interrupted by user; exiting cleanly")
