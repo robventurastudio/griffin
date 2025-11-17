@@ -12,19 +12,34 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+
+def _ensure_repo_root() -> Path:
+    """Add the repository root to ``sys.path`` if it's missing.
+
+    When running this script directly (``python scripts/run_open_close.py``),
+    Python sets ``sys.path[0]`` to the ``scripts`` folder, so the project root
+    is not importable. We walk up the filesystem from this file until we find
+    a directory containing ``alpaca_trader``.
+    """
+
+    script_path = Path(__file__).resolve()
+    for candidate in script_path.parents:
+        if (candidate / "alpaca_trader").is_dir():
+            if str(candidate) not in sys.path:
+                sys.path.insert(0, str(candidate))
+            return candidate
+
+    raise ImportError(
+        "Could not locate repository root containing 'alpaca_trader'. "
+        "Run the script from within the project checkout."
+    )
+
+
 # Ensure repository root is importable when running the script directly.
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+ROOT = _ensure_repo_root()
 
 from alpaca_trader.engine import run_open_close_loop
 
 
 if __name__ == "__main__":
     run_open_close_loop()
-"""Backward-compatible entrypoint that delegates to the new CLI."""
-
-from alpaca_trader.cli import main
-
-if __name__ == "__main__":
-    raise SystemExit(main())

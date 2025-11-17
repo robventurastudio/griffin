@@ -103,12 +103,6 @@ def run_open_close_loop(
     (e.g., ``run_open_close_loop(universe=..., qty=..., strategy=...)``) do not
     raise ``TypeError``. All parameters other than ``poll_seconds`` and
     ``client`` are ignored because this helper only monitors the market clock.
-def run_open_close_loop() -> None:
-    """Continuously log Alpaca market clock status with safe timezone handling.
-
-    This loop is intentionally lightweight so it can be used as a smoke test
-    during setup: it fetches the current clock, logs the relevant timestamps,
-    waits, and repeats. KeyboardInterrupt will stop the loop.
     """
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -117,8 +111,6 @@ def run_open_close_loop() -> None:
 
     poll_seconds = poll_seconds or 30
     client = client or AlpacaClient()
-    client = AlpacaClient()
-    poll_seconds = 30
     LOG.info("Starting open/close loop (poll=%ss)", poll_seconds)
 
     try:
