@@ -85,6 +85,24 @@ def log_clock(clock: Optional[dict]) -> str:
     return f"Market clock ({'open' if is_open else 'closed'}): " + " | ".join(parts)
 
 
+def run_open_close_loop(
+    *,
+    poll_seconds: int | None = None,
+    universe=None,
+    qty=None,
+    direction=None,
+    strategy=None,
+    data=None,
+    risk_limits=None,
+    client=None,
+    **_: Any,
+) -> None:
+    """Continuously log Alpaca market clock status with safe timezone handling.
+
+    Accepts a broad set of keyword arguments so calls from older CLI entrypoints
+    (e.g., ``run_open_close_loop(universe=..., qty=..., strategy=...)``) do not
+    raise ``TypeError``. All parameters other than ``poll_seconds`` and
+    ``client`` are ignored because this helper only monitors the market clock.
 def run_open_close_loop() -> None:
     """Continuously log Alpaca market clock status with safe timezone handling.
 
@@ -97,6 +115,8 @@ def run_open_close_loop() -> None:
 
     from alpaca_trader.alpaca_client import AlpacaClient  # imported lazily
 
+    poll_seconds = poll_seconds or 30
+    client = client or AlpacaClient()
     client = AlpacaClient()
     poll_seconds = 30
     LOG.info("Starting open/close loop (poll=%ss)", poll_seconds)
