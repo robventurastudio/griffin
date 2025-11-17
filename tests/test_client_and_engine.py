@@ -1,5 +1,7 @@
 import datetime as dt
 import unittest
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 
 import pandas as pd
 
@@ -59,6 +61,28 @@ class ClockLoggingTest(unittest.TestCase):
         self.assertIn("open", message)
         self.assertIn("next_open=2024-01-02 14:30:00 UTC", message)
         self.assertIn("next_close=2024-01-02 21:00:00 UTC", message)
+
+
+class RunOpenCloseScriptTest(unittest.TestCase):
+    def test_script_injects_repo_root(self):
+        root = Path(__file__).resolve().parents[1]
+        script_path = root / "scripts" / "run_open_close.py"
+
+        # Simulate running from the scripts directory where repo root is not on sys.path.
+        import sys
+
+        original_path = list(sys.path)
+        sys.path = [p for p in sys.path if p != str(root)]
+        try:
+            spec = spec_from_file_location("run_open_close", script_path)
+            module = module_from_spec(spec)
+            assert spec.loader is not None
+            spec.loader.exec_module(module)
+
+            self.assertEqual(module.ROOT, root)
+            self.assertIn(str(root), sys.path)
+        finally:
+            sys.path = original_path
 
 
 if __name__ == "__main__":
