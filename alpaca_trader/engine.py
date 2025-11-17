@@ -1,4 +1,3 @@
-"""Engine helpers with timezone-safe formatting and a minimal trading loop."""
 """Engine helpers with timezone-safe formatting and clock reporting."""
 from __future__ import annotations
 
@@ -7,7 +6,6 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Optional
-from typing import Any, Optional
 
 from dateutil import parser
 
@@ -101,7 +99,7 @@ class OpenCloseMarketStrategy:
 
 # Time helpers -------------------------------------------------------------
 
-def _ensure_timezone(dt_obj: dt.datetime) -> dt.datetime:
+
 def _ensure_timezone(dt_obj: dt.datetime) -> dt.datetime:
     """Ensure the datetime is timezone-aware in UTC."""
 
