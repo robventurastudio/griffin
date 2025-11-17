@@ -80,7 +80,7 @@ python -m alpaca_trader.cli trade \
 Flags:
 - `--symbols`: comma-separated overrides for the universe (defaults to `alpaca_trader/universe.py`).
 - `--qty`: number of shares per symbol (default from `alpaca_trader/config.py`).
-- `--direction`: `long` or `short`.
+- `--direction`: `long`, `short`, or `both` (ORB only).
 - `--disable-data-stream`: skip the websocket feed.
 - `--strategy`: custom strategy path in `module:Class` format.
 - `--poll-interval`: seconds between clock polls (defaults to `POLL_INTERVAL_SECONDS`).
@@ -89,7 +89,7 @@ Flags:
 #### Strategy options
 
 - **Open/close baseline**: `alpaca_trader.strategies.open_close_dummy:OpenCloseStrategy` (default), trades the configured universe at the bell.
-- **Opening Range Breakout (ORB)**: `alpaca_trader.strategies.orb:OpeningRangeBreakout` supports 5m ranges, volume filters, long/short triggers, and optional sizing via the risk manager.
+- **Opening Range Breakout (ORB)**: `alpaca_trader.strategies.orb:OpeningRangeBreakout` supports 5m ranges, volume filters, long/short/both triggers, optional sizing via the risk manager, and automatic stop/target exits after a breakout.
 
 Example ORB run:
 

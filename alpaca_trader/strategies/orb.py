@@ -54,6 +54,10 @@ class OpeningRangeBreakout:
                 "entry": 0.0,
                 "stop": 0.0,
                 "target": 0.0,
+                "side": "",
+                "active": False,
+                "done": False,
+                "qty": 0,
             }
 
     # ------------------------------------------------------------------
@@ -78,6 +82,7 @@ class OpeningRangeBreakout:
             if now < range_end:
                 continue
             self._maybe_trade(symbol, symbol_state.get(symbol))
+            self._maybe_exit(symbol, symbol_state.get(symbol))
 
     def on_bar(self, symbol: str, bar: Dict[str, float], session) -> list:
         """Backtest hook returning actions for the provided bar."""
@@ -87,6 +92,8 @@ class OpeningRangeBreakout:
         state.setdefault("or_low", 0.0)
         state.setdefault("or_avg_vol", 0.0)
         state.setdefault("triggered", False)
+        state.setdefault("active", False)
+        state.setdefault("done", False)
 
         now = bar.get("timestamp")
         open_dt = _session_open(now if isinstance(now, datetime) else datetime.utcnow().replace(tzinfo=timezone.utc))
@@ -144,7 +151,7 @@ class OpeningRangeBreakout:
         )
 
     def _maybe_trade(self, symbol: str, state: Optional[Dict[str, float]]) -> None:
-        if not state or state.get("triggered"):
+        if not state or state.get("done"):
             return
 
         price = self._latest_price(symbol)
@@ -179,7 +186,18 @@ class OpeningRangeBreakout:
         LOGGER.info(
             "ORB %s %s qty=%s entry=%.2f stop=%.2f target=%.2f", symbol, side, qty, price, stop, target
         )
-        state.update({"triggered": True, "entry": price, "stop": stop, "target": target, "order_id": getattr(order, "id", "")})
+        state.update(
+            {
+                "triggered": True,
+                "active": True,
+                "entry": price,
+                "stop": stop,
+                "target": target,
+                "order_id": getattr(order, "id", ""),
+                "side": side,
+                "qty": qty,
+            }
+        )
 
     def _size(self, symbol: str, price: float, atr: Optional[float]) -> int:
         if self.risk_manager:
@@ -189,9 +207,13 @@ class OpeningRangeBreakout:
         return self.qty
 
     def _bar_actions(self, symbol: str, bar: Dict[str, float], state: Dict[str, float]) -> list:
+        price = bar["close"]
+        if state.get("done"):
+            return []
+        if state.get("active"):
+            return self._bar_exit_actions(symbol, price, state)
         if state.get("triggered"):
             return []
-        price = bar["close"]
         or_high = state.get("or_high", 0.0)
         or_low = state.get("or_low", 0.0)
         avg_vol = state.get("or_avg_vol", 0.0)
@@ -205,8 +227,32 @@ class OpeningRangeBreakout:
         qty = self._size(symbol, price, atr=range_size)
         if qty <= 0:
             return []
-        state.update({"triggered": True, "entry": price})
+        state.update(
+            {
+                "triggered": True,
+                "active": True,
+                "entry": price,
+                "side": side,
+                "stop": or_low if long_ok else or_high,
+                "target": price + (range_size * self.target_multiple) if long_ok else price - (range_size * self.target_multiple),
+                "qty": qty,
+            }
+        )
         return [{"side": side, "qty": qty}]
+
+    def _bar_exit_actions(self, symbol: str, price: float, state: Dict[str, float]) -> list:
+        side = state.get("side", "")
+        stop = state.get("stop")
+        target = state.get("target")
+        if not side or stop is None or target is None:
+            return []
+        hit_stop = (side == "buy" and price <= stop) or (side == "sell" and price >= stop)
+        hit_target = (side == "buy" and price >= target) or (side == "sell" and price <= target)
+        if not (hit_stop or hit_target):
+            return []
+        state.update({"active": False, "done": True})
+        exit_side = "sell" if side == "buy" else "buy"
+        return [{"side": exit_side, "qty": int(state.get("qty", 0) or 0) or 1}]
 
     def _latest_price(self, symbol: str) -> Optional[float]:
         try:
@@ -216,3 +262,31 @@ class OpeningRangeBreakout:
         except Exception:  # pragma: no cover - network
             LOGGER.exception("Failed to fetch latest trade for %s", symbol)
             return None
+
+    def _maybe_exit(self, symbol: str, state: Optional[Dict[str, float]]) -> None:
+        if not state or not state.get("active"):
+            return
+        price = state.get("last_price") or self._latest_price(symbol)
+        if price is None:
+            return
+        stop = state.get("stop")
+        target = state.get("target")
+        side = state.get("side")
+        if stop is None or target is None or not side:
+            return
+        hit_stop = (side == "buy" and price <= stop) or (side == "sell" and price >= stop)
+        hit_target = (side == "buy" and price >= target) or (side == "sell" and price <= target)
+        if not (hit_stop or hit_target):
+            return
+        exit_side = "sell" if side == "buy" else "buy"
+        LOGGER.info(
+            "ORB exit %s via %s at %.2f (stop=%.2f target=%.2f)",
+            symbol,
+            "stop" if hit_stop else "target",
+            price,
+            stop,
+            target,
+        )
+        exit_qty = int(state.get("qty", 0) or self.qty)
+        self.client.submit_market_order(symbol=symbol, qty=exit_qty, side=exit_side)
+        self.state[symbol].update({"active": False, "done": True})

@@ -46,7 +46,7 @@ def _build_parser() -> argparse.ArgumentParser:
     trade = subparsers.add_parser("trade", help="Start the trading loop")
     trade.add_argument("--symbols", help="Comma-separated symbol list", default=None)
     trade.add_argument("--qty", type=int, default=TRADER_QTY, help="Order size per symbol")
-    trade.add_argument("--direction", choices=["long", "short"], default="long")
+    trade.add_argument("--direction", choices=["long", "short", "both"], default="long")
     trade.add_argument("--disable-data-stream", action="store_true", help="Disable websocket feed")
     trade.add_argument("--strategy", help="Strategy path module:Class")
     trade.add_argument("--poll-interval", type=int, default=POLL_INTERVAL_SECONDS)
