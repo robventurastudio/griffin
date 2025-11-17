@@ -98,6 +98,15 @@ class AlpacaClient:
     def latest_bar(self, symbol: str):
         return self._rest.get_latest_bar(symbol)
 
+    def list_positions(self):
+        return self._rest.list_positions()
+
+    def submit_order(self, symbol: str, qty: int, side: str) -> None:
+        self._rest.submit_order(symbol, qty, side, type="market", time_in_force="day")
+
+    def close_all_positions(self):
+        self._rest.close_all_positions()
+
     def events_endpoint(self, event_type: str) -> str:
         """Return the SSE URL to subscribe to a specific event type."""
 
