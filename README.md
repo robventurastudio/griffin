@@ -45,6 +45,10 @@ python -m unittest discover -v tests
 ```
 Starter scaffolding for experimenting with Alpaca's paper trading APIs.
 
+## Strategy stack roadmap
+
+See [STRATEGY_STACK.md](STRATEGY_STACK.md) for the prioritized list of intraday and swing modules (ORB, VWAP mean reversion, EMA pullback, gap bias, range scalper, and session close plays) that will round out Griffin's toolbox beyond the opening-range breakout.
+
 ## Quick start
 1. Create a virtual environment and install dependencies:
    ```bash
