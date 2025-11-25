@@ -115,3 +115,13 @@ class AlpacaClient:
         """Return the SSE URL to subscribe to a specific event type."""
 
         return build_events_url(self.base_url, event_type)
+
+    def get_previous_close(self, symbol: str):
+        """Return the prior close for ``symbol`` using a 1D bar lookup."""
+
+        bars = self._rest.get_bars(symbol, "1Day", limit=1)
+        if not bars:
+            return None
+
+        bar = bars[0]
+        return getattr(bar, "c", None) or getattr(bar, "close", None)

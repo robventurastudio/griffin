@@ -98,6 +98,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Minimum number of bars before the EMA pullback strategy can enter",
     )
     trade.add_argument(
+        "--gap-threshold-pct",
+        type=float,
+        default=1.5,
+        help="Gap percentage needed to tag a bullish/bearish bias for the session",
+    )
+    trade.add_argument(
         "--trading-mode",
         choices=["paper", "live"],
         default="paper",
@@ -154,6 +160,7 @@ def _handle_trade(args: argparse.Namespace) -> int:
         strategy_name=args.strategy,
         strategy_config=strategy_config,
         client=client,
+        gap_threshold_pct=args.gap_threshold_pct,
     )
     return 0
 

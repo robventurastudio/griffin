@@ -10,6 +10,7 @@ from alpaca_trader.engine import (
     RiskManager,
     VwapReversionStrategy,
     EmaPullbackStrategy,
+    GapBiasModule,
     run_trading_session,
 )
 
@@ -49,6 +50,7 @@ class _FakeClient:
         positions=None,
         account_values: list[float] | None = None,
         volumes: dict[str, float] | None = None,
+        previous_closes: dict[str, float] | None = None,
     ):
         self._clock = clock
         self._account = account
@@ -58,6 +60,7 @@ class _FakeClient:
         self._positions = positions or {}
         self._account_values = list(account_values or [])
         self._volumes = volumes or {}
+        self._previous_closes = previous_closes or {}
 
     def get_clock(self):
         return self._clock
@@ -72,6 +75,9 @@ class _FakeClient:
 
     def list_positions(self):
         return [_FakePosition(sym, qty) for sym, qty in self._positions.items()]
+
+    def get_previous_close(self, symbol: str):
+        return self._previous_closes.get(symbol)
 
     def submit_order(self, symbol: str, qty: int, side: str):
         self._orders.append((symbol, qty, side))
@@ -133,6 +139,30 @@ class StrategyTest(unittest.TestCase):
         self.assertEqual(len(orders), 1)
         self.assertEqual(orders[0].side, "sell")
         self.assertEqual(orders[0].qty, 10)
+
+
+class GapBiasModuleTest(unittest.TestCase):
+    def test_classifies_gap_and_resets_each_session(self):
+        module = GapBiasModule(threshold_pct=2.0)
+        session_one = dt.date(2024, 1, 1)
+        biases = module.update(
+            session_date=session_one,
+            prices={"SPY": 103.0},
+            previous_closes={"SPY": 100.0},
+        )
+
+        self.assertEqual(biases["SPY"], "bullish")
+        self.assertAlmostEqual(module.gap_pct("SPY"), 3.0)
+
+        session_two = session_one + dt.timedelta(days=1)
+        biases = module.update(
+            session_date=session_two,
+            prices={"SPY": 97.0},
+            previous_closes={"SPY": 100.0},
+        )
+
+        self.assertEqual(biases["SPY"], "bearish")
+        self.assertAlmostEqual(module.gap_pct("SPY"), -3.0)
 
 
 class TradingLoopTest(unittest.TestCase):
@@ -283,6 +313,39 @@ class StrategyExpansionTest(unittest.TestCase):
         )
 
         self.assertTrue(any(o.side == "buy" for o in orders))
+
+    def test_vwap_reversion_respects_bearish_gap_bias(self):
+        sizer = PositionSizer(RiskLimits(per_trade_risk_pct=1), base_qty=1)
+        strat = VwapReversionStrategy(
+            ["SPY"], sizer, close_buffer_minutes=10, z_threshold=1.0, min_history=3
+        )
+
+        for price in [100.0, 101.0, 99.0]:
+            strat.price_history.add_price("SPY", price)
+
+        now = dt.datetime(2024, 1, 1, 14, 0, tzinfo=dt.timezone.utc)
+        biases = {"SPY": "bearish"}
+        blocked = strat.plan_orders(
+            now=now,
+            next_close=now + dt.timedelta(hours=6),
+            positions={"SPY": 0},
+            prices={"SPY": 95.0},
+            equity=100_000,
+            biases=biases,
+        )
+
+        self.assertEqual(blocked, [])
+
+        allowed = strat.plan_orders(
+            now=now,
+            next_close=now + dt.timedelta(hours=6),
+            positions={"SPY": 0},
+            prices={"SPY": 95.0},
+            equity=100_000,
+            biases={"SPY": "neutral"},
+        )
+
+        self.assertTrue(any(o.side == "buy" for o in allowed))
 
     def test_vwap_reversion_uses_volume_weighting(self):
         sizer = PositionSizer(RiskLimits(per_trade_risk_pct=1), base_qty=1)

@@ -26,7 +26,7 @@ Griffin should evolve beyond a single ORB play by shipping a small, modular coll
 ## 5) Gap Strategy (Fade or Continuation)
 - **Role:** Pre-market setup based on overnight moves.
 - **Signal basics:** Measure gap vs prior close and pre-market high/low; fade overextended gaps into resistance/VWAP or follow-through when gap aligns with broader trend and volume.
-- **Integration:** Sets a daily bias flag that downstream intraday strategies (ORB, EMA pullback) can honor.
+- **Integration:** Sets a daily bias flag that downstream intraday strategies (ORB, EMA pullback, VWAP) honor; current implementation tags bullish/bearish/neutral bias off the pre-open gap and blocks long entries when the bias is bearish.
 
 ## 6) Session Close Strategy
 - **Role:** Final 30–60 minutes management.

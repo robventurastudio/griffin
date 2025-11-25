@@ -63,7 +63,7 @@ there is no ambiguity.
 
 ### Strategy menu
 
-The `trade` command supports four strategies out of the box:
+The `trade` command supports four strategies out of the box plus a gap-bias overlay:
 
 - `orb` (default): build a 30-minute opening range and buy breakouts above the
   high with a configurable buffer, exiting if price loses the range low or as the
@@ -75,10 +75,13 @@ The `trade` command supports four strategies out of the box:
   toward the anchor.
 - `ema-pullback`: dual-EMA trend bias with pullback entries, a short history
   warmup, and exits when price loses the slow EMA.
+- Gap bias overlay: classify the session as bullish/bearish/neutral based on the
+  pre-open gap vs prior close and only allow long entries when the bias is not
+  bearish. Configurable with `--gap-threshold-pct`.
 
 Use the flags `--strategy`, `--orb-range-minutes`, `--orb-breakout-buffer`,
-`--vwap-z`, `--ema-fast`, `--ema-slow`, `--ema-pullback-buffer`, and
-`--ema-min-history` to tune the behaviors.
+`--vwap-z`, `--ema-fast`, `--ema-slow`, `--ema-pullback-buffer`, `--ema-min-history`,
+and `--gap-threshold-pct` to tune the behaviors.
 
 ## Strategy stack roadmap
 
