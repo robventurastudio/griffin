@@ -2,6 +2,7 @@ import datetime as dt
 import unittest
 
 from alpaca_trader.engine import (
+    OpeningRangeBreakoutStrategy,
     OpenCloseMarketStrategy,
     PositionSizer,
     RiskLimits,
@@ -207,6 +208,58 @@ class TradingLoopTest(unittest.TestCase):
 
 
 class StrategyExpansionTest(unittest.TestCase):
+    def test_orb_builds_range_then_breaks_out(self):
+        sizer = PositionSizer(RiskLimits(per_trade_risk_pct=1), base_qty=1)
+        strat = OpeningRangeBreakoutStrategy(
+            ["SPY"], sizer, close_buffer_minutes=10, range_minutes=30, breakout_buffer=0.0
+        )
+
+        session_start = dt.datetime(2024, 1, 1, 14, 30, tzinfo=dt.timezone.utc)
+        # During the range-building window, no orders are emitted but the high/low are tracked.
+        orders = strat.plan_orders(
+            now=session_start,
+            next_close=session_start + dt.timedelta(hours=6),
+            positions={"SPY": 0},
+            prices={"SPY": 100},
+            equity=100_000,
+        )
+        self.assertEqual(orders, [])
+
+        breakout_time = session_start + dt.timedelta(minutes=31)
+        orders = strat.plan_orders(
+            now=breakout_time,
+            next_close=session_start + dt.timedelta(hours=6),
+            positions={"SPY": 0},
+            prices={"SPY": 101},
+            equity=100_000,
+        )
+        self.assertTrue(any(o.side == "buy" for o in orders))
+
+    def test_orb_exits_if_range_lows_break(self):
+        sizer = PositionSizer(RiskLimits(per_trade_risk_pct=1), base_qty=1)
+        strat = OpeningRangeBreakoutStrategy(
+            ["SPY"], sizer, close_buffer_minutes=10, range_minutes=1, breakout_buffer=0.0
+        )
+
+        session_start = dt.datetime(2024, 1, 2, 14, 30, tzinfo=dt.timezone.utc)
+        strat.plan_orders(
+            now=session_start,
+            next_close=session_start + dt.timedelta(hours=6),
+            positions={"SPY": 0},
+            prices={"SPY": 100},
+            equity=100_000,
+        )
+
+        after_range = session_start + dt.timedelta(minutes=2)
+        orders = strat.plan_orders(
+            now=after_range,
+            next_close=session_start + dt.timedelta(hours=6),
+            positions={"SPY": 10},
+            prices={"SPY": 95},
+            equity=100_000,
+        )
+        self.assertTrue(any(o.side == "sell" for o in orders))
+
     def test_vwap_reversion_enters_when_discounted(self):
         sizer = PositionSizer(RiskLimits(per_trade_risk_pct=1), base_qty=1)
         strat = VwapReversionStrategy(

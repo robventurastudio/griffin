@@ -203,6 +203,94 @@ class VwapReversionStrategy(_BaseTimedStrategy):
         return orders
 
 
+class OpeningRangeBreakoutStrategy(_BaseTimedStrategy):
+    """Opening range breakout with a configurable window and buffer."""
+
+    def __init__(
+        self,
+        symbols: Iterable[str],
+        position_sizer: PositionSizer,
+        close_buffer_minutes: int = 10,
+        range_minutes: int = 30,
+        breakout_buffer: float = 0.001,
+    ) -> None:
+        super().__init__(close_buffer_minutes)
+        self.symbols = list(symbols)
+        self.position_sizer = position_sizer
+        self.range_minutes = range_minutes
+        self.breakout_buffer = breakout_buffer
+        self._session_date: dt.date | None = None
+        self._range_end: dt.datetime | None = None
+        self._range_high: dict[str, float] = {}
+        self._range_low: dict[str, float] = {}
+
+    def _reset_session(self, now: dt.datetime) -> None:
+        self._session_date = now.date()
+        self._range_end = now + dt.timedelta(minutes=self.range_minutes)
+        self._range_high = {}
+        self._range_low = {}
+
+    def _record_opening_range(self, symbol: str, price: float) -> None:
+        high = self._range_high.get(symbol)
+        low = self._range_low.get(symbol)
+        self._range_high[symbol] = price if high is None else max(high, price)
+        self._range_low[symbol] = price if low is None else min(low, price)
+
+    def _opening_range_built(self, now: dt.datetime) -> bool:
+        return self._range_end is not None and now > self._range_end
+
+    def plan_orders(
+        self,
+        *,
+        now: dt.datetime,
+        next_close: dt.datetime,
+        positions: dict[str, int],
+        prices: dict[str, float],
+        equity: float,
+    ) -> list[OrderRequest]:
+        close_exits = self._exit_near_close(
+            now=now, next_close=next_close, positions=positions
+        )
+        if close_exits:
+            return close_exits
+
+        if self._session_date != now.date() or self._range_end is None:
+            self._reset_session(now)
+
+        building_range = not self._opening_range_built(now)
+        if building_range:
+            for symbol in self.symbols:
+                price = prices.get(symbol)
+                if price is not None:
+                    self._record_opening_range(symbol, price)
+            return []
+
+        orders: list[OrderRequest] = []
+        for symbol in self.symbols:
+            price = prices.get(symbol)
+            if price is None:
+                continue
+
+            range_high = self._range_high.get(symbol)
+            range_low = self._range_low.get(symbol)
+            if range_high is None or range_low is None:
+                continue
+
+            held_qty = positions.get(symbol, 0)
+
+            if held_qty > 0 and price <= range_low:
+                orders.append(OrderRequest(symbol=symbol, qty=held_qty, side="sell"))
+                continue
+
+            breakout_price = range_high * (1 + self.breakout_buffer)
+            if held_qty == 0 and price >= breakout_price:
+                qty = self.position_sizer.size_for_price(equity, price)
+                if qty > 0:
+                    orders.append(OrderRequest(symbol=symbol, qty=qty, side="buy"))
+
+        return orders
+
+
 class EmaPullbackStrategy(_BaseTimedStrategy):
     """Ride an intraday trend using a dual-EMA bias and pullback entries."""
 
@@ -424,6 +512,14 @@ def _build_strategy(
     strategy_config: Optional[dict[str, Any]] = None,
 ):
     config = strategy_config or {}
+    if name == "orb":
+        return OpeningRangeBreakoutStrategy(
+            symbols,
+            sizer,
+            close_buffer_minutes=close_buffer_minutes,
+            range_minutes=int(config.get("range_minutes", 30)),
+            breakout_buffer=float(config.get("breakout_buffer", 0.001)),
+        )
     if name == "open-close":
         return OpenCloseMarketStrategy(symbols, sizer, close_buffer_minutes)
     if name == "vwap-reversion":
@@ -445,7 +541,7 @@ def _build_strategy(
             pullback_buffer=float(config.get("pullback_buffer", 0.001)),
         )
     raise ValueError(
-        "Unknown strategy '{name}'. Supported: open-close, vwap-reversion, ema-pullback".format(
+        "Unknown strategy '{name}'. Supported: orb, open-close, vwap-reversion, ema-pullback".format(
             name=name
         )
     )

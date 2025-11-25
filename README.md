@@ -63,17 +63,21 @@ there is no ambiguity.
 
 ### Strategy menu
 
-The `trade` command supports three strategies out of the box:
+The `trade` command supports four strategies out of the box:
 
-- `open-close` (default): buy your universe at market open and exit before the close
+- `orb` (default): build a 30-minute opening range and buy breakouts above the
+  high with a configurable buffer, exiting if price loses the range low or as the
+  close buffer approaches.
+- `open-close`: buy your universe at market open and exit before the close
   buffer.
 - `vwap-reversion`: maintain a rolling price anchor and buy dips that are multiple
   standard deviations below it, exiting on reversion toward the anchor.
 - `ema-pullback`: dual-EMA trend bias with pullback entries and exits when price
   loses the slow EMA.
 
-Use the flags `--strategy`, `--vwap-z`, `--ema-fast`, `--ema-slow`, and
-`--ema-pullback-buffer` to tune the behaviors.
+Use the flags `--strategy`, `--orb-range-minutes`, `--orb-breakout-buffer`,
+`--vwap-z`, `--ema-fast`, `--ema-slow`, and `--ema-pullback-buffer` to tune the
+behaviors.
 
 ## Strategy stack roadmap
 

@@ -51,9 +51,21 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     trade.add_argument(
         "--strategy",
-        choices=["open-close", "vwap-reversion", "ema-pullback"],
-        default="open-close",
+        choices=["orb", "open-close", "vwap-reversion", "ema-pullback"],
+        default="orb",
         help="Select which trading strategy to run",
+    )
+    trade.add_argument(
+        "--orb-range-minutes",
+        type=int,
+        default=30,
+        help="Opening range duration in minutes for ORB",
+    )
+    trade.add_argument(
+        "--orb-breakout-buffer",
+        type=float,
+        default=0.001,
+        help="Fractional buffer above the range high required to trigger an ORB entry",
     )
     trade.add_argument(
         "--vwap-z",
@@ -107,6 +119,13 @@ def _handle_trade(args: argparse.Namespace) -> int:
     client = AlpacaClient(base_url=base_url)
 
     strategy_config = {}
+    if args.strategy == "orb":
+        strategy_config.update(
+            {
+                "range_minutes": args.orb_range_minutes,
+                "breakout_buffer": args.orb_breakout_buffer,
+            }
+        )
     if args.strategy == "vwap-reversion":
         strategy_config["z_threshold"] = args.vwap_z
     if args.strategy == "ema-pullback":
