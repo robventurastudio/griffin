@@ -1,13 +1,11 @@
 """Engine helpers with timezone-safe formatting and a minimal trading loop."""
-"""Engine helpers with timezone-safe formatting and clock reporting."""
 from __future__ import annotations
 
 import datetime as dt
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, Optional
-from typing import Any, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from dateutil import parser
 
@@ -72,8 +70,8 @@ class OpenCloseMarketStrategy:
         *,
         now: dt.datetime,
         next_close: dt.datetime,
-        positions: Dict[str, int],
-        prices: Dict[str, float],
+        positions: dict[str, int],
+        prices: dict[str, float],
         equity: float,
     ) -> list[OrderRequest]:
         orders: list[OrderRequest] = []
@@ -101,7 +99,6 @@ class OpenCloseMarketStrategy:
 
 # Time helpers -------------------------------------------------------------
 
-def _ensure_timezone(dt_obj: dt.datetime) -> dt.datetime:
 def _ensure_timezone(dt_obj: dt.datetime) -> dt.datetime:
     """Ensure the datetime is timezone-aware in UTC."""
 
@@ -209,13 +206,7 @@ def run_open_close_loop(
     client=None,
     **_: Any,
 ) -> None:
-    """Continuously log Alpaca market clock status with safe timezone handling.
-
-    Accepts a broad set of keyword arguments so calls from older CLI entrypoints
-    (e.g., ``run_open_close_loop(universe=..., qty=..., strategy=...)``) do not
-    raise ``TypeError``. All parameters other than ``poll_seconds`` and
-    ``client`` are ignored because this helper only monitors the market clock.
-    """
+    """Continuously log Alpaca market clock status with safe timezone handling."""
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
@@ -282,7 +273,7 @@ def run_trading_session(
 
         clock = client.get_clock()
         LOG.info(log_clock(clock))
-        now = _ensure_datetime(getattr(clock, "timestamp", None))
+        now = _ensure_datetime(_get_clock_field(clock, "timestamp"))
         next_open = _ensure_datetime(_get_clock_field(clock, "next_open"))
         next_close = _ensure_datetime(_get_clock_field(clock, "next_close"))
         is_open = bool(_get_clock_field(clock, "is_open"))
