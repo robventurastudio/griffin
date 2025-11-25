@@ -92,6 +92,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="How far above the fast EMA we allow entries (fractional)",
     )
     trade.add_argument(
+        "--ema-min-history",
+        type=int,
+        default=5,
+        help="Minimum number of bars before the EMA pullback strategy can enter",
+    )
+    trade.add_argument(
         "--trading-mode",
         choices=["paper", "live"],
         default="paper",
@@ -134,6 +140,7 @@ def _handle_trade(args: argparse.Namespace) -> int:
                 "fast_span": args.ema_fast,
                 "slow_span": args.ema_slow,
                 "pullback_buffer": args.ema_pullback_buffer,
+                "min_history": args.ema_min_history,
             }
         )
 

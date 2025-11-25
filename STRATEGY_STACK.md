@@ -73,7 +73,7 @@ These snippets turn the roadmap into shippable work with clear tuning levers.
 
 ### EMA Pullback (Intraday Trend)
 - **Build:**
-  - Compute dual EMAs (e.g., 20/50). Bias long when price > slow EMA; wait for pullbacks toward fast EMA with confirmation (e.g., bullish candle close) before entry. Mirror for shorts.
+  - Compute dual EMAs (e.g., 20/50). Bias long when price > slow EMA; wait for pullbacks toward fast EMA with confirmation (e.g., bullish candle close) before entry. Current implementation ships the long side with a configurable warmup (`--ema-min-history`) and exits when price loses the slow EMA.
   - Include higher-timeframe bias from a pre-open scan (gap/previous close context) to avoid countertrend trades.
   - Stops: below the recent swing low for longs (swing high for shorts); targets via R-multiple or trailing EMA.
 - **Optimize:**

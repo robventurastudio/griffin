@@ -366,6 +366,7 @@ class EmaPullbackStrategy(_BaseTimedStrategy):
         fast_span: int = 12,
         slow_span: int = 26,
         pullback_buffer: float = 0.001,
+        min_history: int = 5,
     ) -> None:
         super().__init__(close_buffer_minutes)
         self.symbols = list(symbols)
@@ -373,8 +374,10 @@ class EmaPullbackStrategy(_BaseTimedStrategy):
         self.fast_span = max(2, fast_span)
         self.slow_span = max(3, slow_span)
         self.pullback_buffer = pullback_buffer
+        self.min_history = max(1, min_history)
         self._ema_fast: dict[str, float] = {}
         self._ema_slow: dict[str, float] = {}
+        self._price_counts: dict[str, int] = {}
 
     @staticmethod
     def _update_ema(prev: Optional[float], price: float, span: int) -> float:
@@ -390,6 +393,7 @@ class EmaPullbackStrategy(_BaseTimedStrategy):
         self._ema_slow[symbol] = self._update_ema(
             self._ema_slow.get(symbol), price, self.slow_span
         )
+        self._price_counts[symbol] = self._price_counts.get(symbol, 0) + 1
 
     def plan_orders(
         self,
@@ -425,6 +429,9 @@ class EmaPullbackStrategy(_BaseTimedStrategy):
             # Exit if the trend fails.
             if held_qty > 0 and price < ema_slow:
                 orders.append(OrderRequest(symbol=symbol, qty=held_qty, side="sell"))
+                continue
+
+            if self._price_counts.get(symbol, 0) < self.min_history:
                 continue
 
             bias_long = ema_fast > ema_slow and price >= ema_slow
@@ -618,6 +625,7 @@ def _build_strategy(
             fast_span=int(config.get("fast_span", 12)),
             slow_span=int(config.get("slow_span", 26)),
             pullback_buffer=float(config.get("pullback_buffer", 0.001)),
+            min_history=int(config.get("min_history", 5)),
         )
     raise ValueError(
         "Unknown strategy '{name}'. Supported: orb, open-close, vwap-reversion, ema-pullback".format(

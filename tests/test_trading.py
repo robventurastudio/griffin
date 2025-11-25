@@ -340,6 +340,41 @@ class StrategyExpansionTest(unittest.TestCase):
 
         self.assertTrue(any(o.side == "sell" for o in orders))
 
+    def test_ema_pullback_waits_for_history_then_enters_on_pullback(self):
+        sizer = PositionSizer(RiskLimits(per_trade_risk_pct=1), base_qty=1)
+        strat = EmaPullbackStrategy(
+            ["QQQ"],
+            sizer,
+            close_buffer_minutes=10,
+            fast_span=3,
+            slow_span=5,
+            pullback_buffer=0.0,
+            min_history=3,
+        )
+
+        now = dt.datetime(2024, 1, 1, 14, 0, tzinfo=dt.timezone.utc)
+        next_close = now + dt.timedelta(hours=6)
+
+        for price in [300.0, 304.0]:
+            orders = strat.plan_orders(
+                now=now,
+                next_close=next_close,
+                positions={"QQQ": 0},
+                prices={"QQQ": price},
+                equity=100_000,
+            )
+            self.assertEqual(orders, [])
+
+        orders = strat.plan_orders(
+            now=now,
+            next_close=next_close,
+            positions={"QQQ": 0},
+            prices={"QQQ": 302.0},
+            equity=100_000,
+        )
+
+        self.assertTrue(any(o.side == "buy" for o in orders))
+
 
 if __name__ == "__main__":
     unittest.main()

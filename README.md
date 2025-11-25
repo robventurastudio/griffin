@@ -73,12 +73,12 @@ The `trade` command supports four strategies out of the box:
 - `vwap-reversion`: maintain a rolling, volume-weighted anchor from latest bars and
   buy dips that are multiple standard deviations below it, exiting on reversion
   toward the anchor.
-- `ema-pullback`: dual-EMA trend bias with pullback entries and exits when price
-  loses the slow EMA.
+- `ema-pullback`: dual-EMA trend bias with pullback entries, a short history
+  warmup, and exits when price loses the slow EMA.
 
 Use the flags `--strategy`, `--orb-range-minutes`, `--orb-breakout-buffer`,
-`--vwap-z`, `--ema-fast`, `--ema-slow`, and `--ema-pullback-buffer` to tune the
-behaviors.
+`--vwap-z`, `--ema-fast`, `--ema-slow`, `--ema-pullback-buffer`, and
+`--ema-min-history` to tune the behaviors.
 
 ## Strategy stack roadmap
 
