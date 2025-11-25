@@ -70,8 +70,9 @@ The `trade` command supports four strategies out of the box:
   close buffer approaches.
 - `open-close`: buy your universe at market open and exit before the close
   buffer.
-- `vwap-reversion`: maintain a rolling price anchor and buy dips that are multiple
-  standard deviations below it, exiting on reversion toward the anchor.
+- `vwap-reversion`: maintain a rolling, volume-weighted anchor from latest bars and
+  buy dips that are multiple standard deviations below it, exiting on reversion
+  toward the anchor.
 - `ema-pullback`: dual-EMA trend bias with pullback entries and exits when price
   loses the slow EMA.
 

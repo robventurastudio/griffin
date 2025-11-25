@@ -22,6 +22,12 @@ class OrderRequest:
 
 
 @dataclass
+class BarData:
+    price: float
+    volume: float | None = None
+
+
+@dataclass
 class RiskLimits:
     max_daily_loss_pct: float = 5.0
     per_trade_risk_pct: float = 1.0
@@ -77,6 +83,55 @@ class _PriceHistory:
         return mean, std, count
 
 
+class _RollingVWAP:
+    """Rolling VWAP tracker with weighted variance for z-score logic."""
+
+    def __init__(self, maxlen: int = 120) -> None:
+        self.maxlen = maxlen
+        self._bars: dict[str, deque[tuple[float, float]]] = {}
+        self._sum_price_volume: dict[str, float] = {}
+        self._sum_volume: dict[str, float] = {}
+        self._sum_price2_volume: dict[str, float] = {}
+
+    def add_bar(self, symbol: str, price: float, volume: float) -> None:
+        if volume is None or volume <= 0:
+            # Fall back to a unit volume so the bar still contributes.
+            volume = 1.0
+
+        if symbol not in self._bars:
+            self._bars[symbol] = deque(maxlen=self.maxlen)
+            self._sum_price_volume[symbol] = 0.0
+            self._sum_volume[symbol] = 0.0
+            self._sum_price2_volume[symbol] = 0.0
+
+        buf = self._bars[symbol]
+        if len(buf) == buf.maxlen:
+            old_price, old_vol = buf[0]
+            self._sum_price_volume[symbol] -= old_price * old_vol
+            self._sum_volume[symbol] -= old_vol
+            self._sum_price2_volume[symbol] -= (old_price**2) * old_vol
+
+        buf.append((price, volume))
+        self._sum_price_volume[symbol] += price * volume
+        self._sum_volume[symbol] += volume
+        self._sum_price2_volume[symbol] += (price**2) * volume
+
+    def stats(self, symbol: str) -> tuple[Optional[float], Optional[float], int]:
+        buf = self._bars.get(symbol)
+        if not buf:
+            return None, None, 0
+
+        total_vol = self._sum_volume.get(symbol, 0.0)
+        if total_vol <= 0:
+            return None, None, len(buf)
+
+        vwap = self._sum_price_volume[symbol] / total_vol
+        mean_sq = self._sum_price2_volume[symbol] / total_vol
+        variance = max(0.0, mean_sq - vwap**2)
+        std = variance**0.5
+        return vwap, std, len(buf)
+
+
 class _BaseTimedStrategy:
     """Shared helpers for strategies that must flatten near the close."""
 
@@ -116,6 +171,7 @@ class OpenCloseMarketStrategy(_BaseTimedStrategy):
         positions: dict[str, int],
         prices: dict[str, float],
         equity: float,
+        bars: dict[str, BarData] | None = None,
     ) -> list[OrderRequest]:
         close_exits = self._exit_near_close(
             now=now, next_close=next_close, positions=positions
@@ -155,6 +211,7 @@ class VwapReversionStrategy(_BaseTimedStrategy):
         self.z_threshold = z_threshold
         self.min_history = min_history
         self.price_history = _PriceHistory(maxlen=history_window)
+        self.vwap_history = _RollingVWAP(maxlen=history_window)
 
     def _should_enter_long(self, price: float, mean: float, std: float) -> bool:
         if std is None or std == 0:
@@ -169,6 +226,7 @@ class VwapReversionStrategy(_BaseTimedStrategy):
         positions: dict[str, int],
         prices: dict[str, float],
         equity: float,
+        bars: dict[str, BarData] | None = None,
     ) -> list[OrderRequest]:
         close_exits = self._exit_near_close(
             now=now, next_close=next_close, positions=positions
@@ -179,12 +237,17 @@ class VwapReversionStrategy(_BaseTimedStrategy):
         orders: list[OrderRequest] = []
 
         for symbol in self.symbols:
-            price = prices.get(symbol)
+            bar = (bars or {}).get(symbol)
+            price = prices.get(symbol) if bar is None else bar.price
             if price is None:
                 continue
 
-            self.price_history.add_price(symbol, price)
-            mean, std, count = self.price_history.stats(symbol)
+            if bar and bar.volume is not None:
+                self.vwap_history.add_bar(symbol, price, bar.volume)
+                mean, std, count = self.vwap_history.stats(symbol)
+            else:
+                self.price_history.add_price(symbol, price)
+                mean, std, count = self.price_history.stats(symbol)
             if count < self.min_history or mean is None:
                 continue
 
@@ -247,6 +310,7 @@ class OpeningRangeBreakoutStrategy(_BaseTimedStrategy):
         positions: dict[str, int],
         prices: dict[str, float],
         equity: float,
+        bars: dict[str, BarData] | None = None,
     ) -> list[OrderRequest]:
         close_exits = self._exit_near_close(
             now=now, next_close=next_close, positions=positions
@@ -335,6 +399,7 @@ class EmaPullbackStrategy(_BaseTimedStrategy):
         positions: dict[str, int],
         prices: dict[str, float],
         equity: float,
+        bars: dict[str, BarData] | None = None,
     ) -> list[OrderRequest]:
         close_exits = self._exit_near_close(
             now=now, next_close=next_close, positions=positions
@@ -467,6 +532,20 @@ def _latest_prices(client: Any, symbols: Iterable[str]) -> dict[str, float]:
         except Exception:
             LOG.exception("Failed to fetch latest bar for %s", symbol)
     return prices
+
+
+def _latest_bars(client: Any, symbols: Iterable[str]) -> dict[str, BarData]:
+    bars: dict[str, BarData] = {}
+    for symbol in symbols:
+        try:
+            bar = client.latest_bar(symbol)
+            price = getattr(bar, "c", None) or getattr(bar, "close", None)
+            volume = getattr(bar, "v", None) or getattr(bar, "volume", None)
+            if price is not None:
+                bars[symbol] = BarData(price=float(price), volume=None if volume is None else float(volume))
+        except Exception:
+            LOG.exception("Failed to fetch latest bar for %s", symbol)
+    return bars
 
 
 def run_open_close_loop(
@@ -625,7 +704,8 @@ def run_trading_session(
             return
 
         positions = _positions_as_qty_map(client.list_positions())
-        prices = _latest_prices(client, symbols)
+        bars = _latest_bars(client, symbols)
+        prices = {sym: data.price for sym, data in bars.items()}
 
         orders = strategy.plan_orders(
             now=now,
@@ -633,6 +713,7 @@ def run_trading_session(
             positions=positions,
             prices=prices,
             equity=equity,
+            bars=bars,
         )
 
         for order in orders:
