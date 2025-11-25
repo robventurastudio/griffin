@@ -6,6 +6,11 @@ import logging
 from typing import Sequence
 
 from alpaca_trader.engine import run_trading_session
+from alpaca_trader.command_sheet import (
+    execute_command,
+    format_commands,
+    load_command_sheet,
+)
 from alpaca_trader.universe import DEFAULT_UNIVERSE
 
 
@@ -16,6 +21,29 @@ def _parse_symbols(value: str | None) -> list[str]:
     if not value:
         return list(DEFAULT_UNIVERSE)
     return [symbol.strip().upper() for symbol in value.split(",") if symbol.strip()]
+
+
+def _add_endpoint_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--trading-mode",
+        choices=["paper", "live"],
+        default="paper",
+        help="Explicitly label the Alpaca endpoint mode",
+    )
+    parser.add_argument(
+        "--base-url",
+        help="Override the Alpaca base URL (implies mode based on URL)",
+        default=None,
+    )
+
+
+def _make_client(args: argparse.Namespace):
+    from alpaca_trader.alpaca_client import AlpacaClient  # local import to avoid slow CLI startup
+
+    base_url = getattr(args, "base_url", None)
+    if not base_url and getattr(args, "trading_mode", "paper") == "live":
+        base_url = "https://api.alpaca.markets"
+    return AlpacaClient(base_url=base_url)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -103,18 +131,28 @@ def _build_parser() -> argparse.ArgumentParser:
         default=1.5,
         help="Gap percentage needed to tag a bullish/bearish bias for the session",
     )
-    trade.add_argument(
-        "--trading-mode",
-        choices=["paper", "live"],
-        default="paper",
-        help="Explicitly label the Alpaca endpoint mode",
-    )
-    trade.add_argument(
-        "--base-url",
-        help="Override the Alpaca base URL (implies mode based on URL)",
-        default=None,
-    )
+    _add_endpoint_args(trade)
     trade.set_defaults(handler=_handle_trade)
+
+    commands = sub.add_parser(
+        "commands", help="List or execute codeword commands from a JSON sheet"
+    )
+    commands.add_argument(
+        "--sheet",
+        default="commands.json",
+        help="Path to a JSON file defining codeword commands",
+    )
+    commands.add_argument(
+        "--codeword",
+        help="Execute a specific codeword; otherwise the sheet is listed",
+    )
+    commands.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the resolved command without hitting the Alpaca API",
+    )
+    _add_endpoint_args(commands)
+    commands.set_defaults(handler=_handle_commands)
 
     return parser
 
@@ -123,12 +161,7 @@ def _handle_trade(args: argparse.Namespace) -> int:
     symbols = _parse_symbols(args.symbols)
     LOG.info("Starting trade loop for symbols: %s", ",".join(symbols))
 
-    from alpaca_trader.alpaca_client import AlpacaClient  # local import to avoid slow CLI startup
-
-    base_url = args.base_url
-    if not base_url and args.trading_mode == "live":
-        base_url = "https://api.alpaca.markets"
-    client = AlpacaClient(base_url=base_url)
+    client = _make_client(args)
 
     strategy_config = {}
     if args.strategy == "orb":
@@ -162,6 +195,23 @@ def _handle_trade(args: argparse.Namespace) -> int:
         client=client,
         gap_threshold_pct=args.gap_threshold_pct,
     )
+    return 0
+
+
+def _handle_commands(args: argparse.Namespace) -> int:
+    commands = load_command_sheet(args.sheet)
+    if not args.codeword:
+        for line in format_commands(commands):
+            print(line)
+        return 0
+
+    client = _make_client(args)
+    cmd = execute_command(args.codeword, client, commands, dry_run=args.dry_run)
+
+    verb = "Would execute" if args.dry_run else "Executed"
+    qty = f"{cmd.qty}" if cmd.qty is not None else "?"
+    symbol = cmd.symbol or "?"
+    LOG.info("%s %s: %s %s", verb, cmd.codeword, qty, symbol)
     return 0
 
 

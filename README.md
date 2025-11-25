@@ -83,6 +83,18 @@ Use the flags `--strategy`, `--orb-range-minutes`, `--orb-breakout-buffer`,
 `--vwap-z`, `--ema-fast`, `--ema-slow`, `--ema-pullback-buffer`, `--ema-min-history`,
 and `--gap-threshold-pct` to tune the behaviors.
 
+### Codeword command sheet
+
+For fast manual overrides, maintain a JSON sheet of codewords that map to direct
+actions (e.g., "BUY100_SPY" -> market buy 100 shares of SPY, "FLATTEN" -> close
+all positions). An example lives in `commands.json`.
+
+- List the sheet: `python -m alpaca_trader.cli commands --sheet commands.json`
+- Execute a codeword (paper by default): `python -m alpaca_trader.cli commands --sheet commands.json --codeword BUY100_SPY`
+- Dry run to preview without hitting the API: add `--dry-run`
+- Use `--trading-mode live` or `--base-url` to intentionally route to the live
+  Alpaca endpoint; the CLI reuses the same endpoint flags as the trading loop.
+
 ## Strategy stack roadmap
 
 See [STRATEGY_STACK.md](STRATEGY_STACK.md) for the prioritized list of intraday and swing modules (ORB, VWAP mean reversion, EMA pullback, gap bias, range scalper, and session close plays) that will round out Griffin's toolbox beyond the opening-range breakout.

@@ -1,0 +1,23 @@
+{
+  "commands": [
+    {
+      "codeword": "BUY100_SPY",
+      "action": "buy",
+      "symbol": "SPY",
+      "qty": 100,
+      "note": "Aggressive SPY long"
+    },
+    {
+      "codeword": "BUY50_QQQ",
+      "action": "buy",
+      "symbol": "QQQ",
+      "qty": 50,
+      "note": "Intraday QQQ add-on"
+    },
+    {
+      "codeword": "FLATTEN",
+      "action": "close_all",
+      "note": "Flatten all open positions"
+    }
+  ]
+}
