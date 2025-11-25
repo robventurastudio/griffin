@@ -38,6 +38,13 @@ The loop sizes positions per symbol using the specified risk percentage, waits f
 market open, respects a max daily loss stop, and exits positions as the close
 window approaches.
 
+If you see `ModuleNotFoundError` for `alpaca_trade_api` or `pandas`, ensure your
+virtual environment is active and install dependencies with:
+
+```bash
+pip install -r requirements.txt
+```
+
 4) Run tests
 
 ```bash

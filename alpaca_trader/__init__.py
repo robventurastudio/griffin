@@ -1,5 +1,9 @@
 """High-level helpers for running an Alpaca retail-trading experiment."""
 
+from .dependencies import check_runtime_dependencies
+
+check_runtime_dependencies()
+
 from .alpaca_client import AlpacaClient
 from .backtester import Backtester
 from .data_stream import LiveTickerFeed
