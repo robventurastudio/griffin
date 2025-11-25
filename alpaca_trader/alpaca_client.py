@@ -65,12 +65,16 @@ class AlpacaClient:
     api_key_id: Optional[str] = None
     api_secret_key: Optional[str] = None
     base_url: Optional[str] = None
+    trading_mode: str = "paper"
 
     def __post_init__(self) -> None:
         self.api_key_id = self.api_key_id or os.getenv("APCA_API_KEY_ID")
         self.api_secret_key = self.api_secret_key or os.getenv("APCA_API_SECRET_KEY")
         raw_base_url = self.base_url or os.getenv("APCA_API_BASE_URL")
         self.base_url = normalize_base_url(raw_base_url)
+        self.trading_mode = (
+            "paper" if "paper-api" in self.base_url else "live"
+        )
 
         if not self.api_key_id or not self.api_secret_key:
             raise EnvironmentError(

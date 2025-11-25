@@ -34,6 +34,10 @@ python -m alpaca_trader.cli trade \
   --close-buffer-min 10
 ```
 
+The client defaults to Alpaca's paper endpoint (`https://paper-api.alpaca.markets`).
+Only switch to live trading by explicitly setting `APCA_API_BASE_URL` to the live
+URL; the CLI will log which endpoint and mode it is using on startup.
+
 The loop sizes positions per symbol using the specified risk percentage, waits for
 market open, respects a max daily loss stop, and exits positions as the close
 window approaches.

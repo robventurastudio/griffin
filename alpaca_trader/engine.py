@@ -247,6 +247,9 @@ def run_trading_session(
     from alpaca_trader.alpaca_client import AlpacaClient  # imported lazily
 
     client = client or AlpacaClient()
+    base_url = getattr(client, "base_url", "(unknown)")
+    trading_mode = getattr(client, "trading_mode", "(unknown)")
+    LOG.info("Alpaca endpoint: %s (%s trading)", base_url, trading_mode)
     account = client.get_account()
     starting_equity = float(getattr(account, "equity", 0.0))
     risk_limits = RiskLimits(
