@@ -23,7 +23,7 @@ ENV
 export $(grep -v '^#' .env | xargs)
 ```
 
-3) Run the paper-trading loop
+3) Run the trading loop (paper by default)
 
 ```bash
 python -m alpaca_trader.cli trade \
@@ -31,7 +31,8 @@ python -m alpaca_trader.cli trade \
   --qty 1 \
   --per-trade-risk-pct 1 \
   --max-daily-loss-pct 5 \
-  --close-buffer-min 10
+  --close-buffer-min 10 \
+  --strategy open-close
 ```
 
 The client defaults to Alpaca's paper endpoint (`https://paper-api.alpaca.markets`).
@@ -54,7 +55,25 @@ pip install -r requirements.txt
 ```bash
 python -m unittest discover -v tests
 ```
-Starter scaffolding for experimenting with Alpaca's paper trading APIs.
+Starter scaffolding for experimenting with Alpaca's paper trading APIs. When you want
+to trade live, either set `APCA_API_BASE_URL` to `https://api.alpaca.markets` or use
+the CLI flag `--trading-mode live` (which will select the live URL unless you provide
+an explicit `--base-url`). The loop logs the resolved endpoint and mode on startup so
+there is no ambiguity.
+
+### Strategy menu
+
+The `trade` command supports three strategies out of the box:
+
+- `open-close` (default): buy your universe at market open and exit before the close
+  buffer.
+- `vwap-reversion`: maintain a rolling price anchor and buy dips that are multiple
+  standard deviations below it, exiting on reversion toward the anchor.
+- `ema-pullback`: dual-EMA trend bias with pullback entries and exits when price
+  loses the slow EMA.
+
+Use the flags `--strategy`, `--vwap-z`, `--ema-fast`, `--ema-slow`, and
+`--ema-pullback-buffer` to tune the behaviors.
 
 ## Strategy stack roadmap
 

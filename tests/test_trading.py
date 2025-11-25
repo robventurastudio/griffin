@@ -6,6 +6,8 @@ from alpaca_trader.engine import (
     PositionSizer,
     RiskLimits,
     RiskManager,
+    VwapReversionStrategy,
+    EmaPullbackStrategy,
     run_trading_session,
 )
 
@@ -202,6 +204,53 @@ class TradingLoopTest(unittest.TestCase):
         )
 
         self.assertIn(("SPY", 10, "sell"), client._orders)
+
+
+class StrategyExpansionTest(unittest.TestCase):
+    def test_vwap_reversion_enters_when_discounted(self):
+        sizer = PositionSizer(RiskLimits(per_trade_risk_pct=1), base_qty=1)
+        strat = VwapReversionStrategy(
+            ["SPY"], sizer, close_buffer_minutes=10, z_threshold=1.5, min_history=3
+        )
+
+        for price in [100, 101, 99, 100]:
+            strat.price_history.add_price("SPY", price)
+
+        now = dt.datetime(2024, 1, 1, 14, 0, tzinfo=dt.timezone.utc)
+        orders = strat.plan_orders(
+            now=now,
+            next_close=now + dt.timedelta(hours=6),
+            positions={"SPY": 0},
+            prices={"SPY": 95},
+            equity=100_000,
+        )
+
+        self.assertTrue(any(o.side == "buy" for o in orders))
+
+    def test_ema_pullback_exits_on_trend_failure(self):
+        sizer = PositionSizer(RiskLimits(per_trade_risk_pct=1), base_qty=1)
+        strat = EmaPullbackStrategy(["QQQ"], sizer, close_buffer_minutes=10)
+
+        now = dt.datetime(2024, 1, 1, 14, 0, tzinfo=dt.timezone.utc)
+        next_close = now + dt.timedelta(hours=6)
+        prices = [300, 301, 302, 303, 304]
+        for price in prices:
+            strat.plan_orders(
+                now=now,
+                next_close=next_close,
+                positions={"QQQ": 0},
+                prices={"QQQ": price},
+                equity=100_000,
+            )
+        orders = strat.plan_orders(
+            now=now,
+            next_close=next_close,
+            positions={"QQQ": 10},
+            prices={"QQQ": 290},
+            equity=100_000,
+        )
+
+        self.assertTrue(any(o.side == "sell" for o in orders))
 
 
 if __name__ == "__main__":

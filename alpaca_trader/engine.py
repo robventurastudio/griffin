@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Optional
 
@@ -52,7 +53,49 @@ class PositionSizer:
         return max(1, sized_qty)
 
 
-class OpenCloseMarketStrategy:
+class _PriceHistory:
+    """Lightweight rolling price store for intraday calculations."""
+
+    def __init__(self, maxlen: int = 120) -> None:
+        self.maxlen = maxlen
+        self._prices: dict[str, deque[float]] = {}
+
+    def add_price(self, symbol: str, price: float) -> None:
+        if symbol not in self._prices:
+            self._prices[symbol] = deque(maxlen=self.maxlen)
+        self._prices[symbol].append(price)
+
+    def stats(self, symbol: str) -> tuple[Optional[float], Optional[float], int]:
+        prices = self._prices.get(symbol)
+        if not prices:
+            return None, None, 0
+
+        count = len(prices)
+        mean = sum(prices) / count
+        variance = sum((p - mean) ** 2 for p in prices) / max(1, count - 1)
+        std = variance**0.5
+        return mean, std, count
+
+
+class _BaseTimedStrategy:
+    """Shared helpers for strategies that must flatten near the close."""
+
+    def __init__(self, close_buffer_minutes: int) -> None:
+        self.close_buffer = dt.timedelta(minutes=close_buffer_minutes)
+
+    def _exit_near_close(
+        self, *, now: dt.datetime, next_close: dt.datetime, positions: dict[str, int]
+    ) -> list[OrderRequest]:
+        if next_close - now > self.close_buffer:
+            return []
+        return [
+            OrderRequest(symbol=symbol, qty=qty, side="sell")
+            for symbol, qty in positions.items()
+            if qty > 0
+        ]
+
+
+class OpenCloseMarketStrategy(_BaseTimedStrategy):
     """Very simple strategy that buys at open and exits near close."""
 
     def __init__(
@@ -61,9 +104,9 @@ class OpenCloseMarketStrategy:
         position_sizer: PositionSizer,
         close_buffer_minutes: int = 10,
     ) -> None:
+        super().__init__(close_buffer_minutes)
         self.symbols = list(symbols)
         self.position_sizer = position_sizer
-        self.close_buffer = dt.timedelta(minutes=close_buffer_minutes)
 
     def plan_orders(
         self,
@@ -74,16 +117,13 @@ class OpenCloseMarketStrategy:
         prices: dict[str, float],
         equity: float,
     ) -> list[OrderRequest]:
+        close_exits = self._exit_near_close(
+            now=now, next_close=next_close, positions=positions
+        )
+        if close_exits:
+            return close_exits
+
         orders: list[OrderRequest] = []
-
-        # If we are approaching the close window, exit any positions.
-        if next_close - now <= self.close_buffer:
-            for symbol, qty in positions.items():
-                if qty > 0:
-                    orders.append(OrderRequest(symbol=symbol, qty=qty, side="sell"))
-            return orders
-
-        # Otherwise open positions we don't already hold.
         for symbol in self.symbols:
             if positions.get(symbol, 0) > 0:
                 continue
@@ -93,6 +133,153 @@ class OpenCloseMarketStrategy:
             qty = self.position_sizer.size_for_price(equity, price)
             if qty > 0:
                 orders.append(OrderRequest(symbol=symbol, qty=qty, side="buy"))
+
+        return orders
+
+
+class VwapReversionStrategy(_BaseTimedStrategy):
+    """Mean reversion toward a rolling VWAP-like anchor (price-only fallback)."""
+
+    def __init__(
+        self,
+        symbols: Iterable[str],
+        position_sizer: PositionSizer,
+        close_buffer_minutes: int = 10,
+        z_threshold: float = 2.0,
+        min_history: int = 5,
+        history_window: int = 60,
+    ) -> None:
+        super().__init__(close_buffer_minutes)
+        self.symbols = list(symbols)
+        self.position_sizer = position_sizer
+        self.z_threshold = z_threshold
+        self.min_history = min_history
+        self.price_history = _PriceHistory(maxlen=history_window)
+
+    def _should_enter_long(self, price: float, mean: float, std: float) -> bool:
+        if std is None or std == 0:
+            return False
+        return price <= mean - self.z_threshold * std
+
+    def plan_orders(
+        self,
+        *,
+        now: dt.datetime,
+        next_close: dt.datetime,
+        positions: dict[str, int],
+        prices: dict[str, float],
+        equity: float,
+    ) -> list[OrderRequest]:
+        close_exits = self._exit_near_close(
+            now=now, next_close=next_close, positions=positions
+        )
+        if close_exits:
+            return close_exits
+
+        orders: list[OrderRequest] = []
+
+        for symbol in self.symbols:
+            price = prices.get(symbol)
+            if price is None:
+                continue
+
+            self.price_history.add_price(symbol, price)
+            mean, std, count = self.price_history.stats(symbol)
+            if count < self.min_history or mean is None:
+                continue
+
+            held_qty = positions.get(symbol, 0)
+
+            # Exit when price snaps back to the anchor.
+            if held_qty > 0 and price >= mean:
+                orders.append(OrderRequest(symbol=symbol, qty=held_qty, side="sell"))
+                continue
+
+            if held_qty == 0 and self._should_enter_long(price, mean, std):
+                qty = self.position_sizer.size_for_price(equity, price)
+                if qty > 0:
+                    orders.append(OrderRequest(symbol=symbol, qty=qty, side="buy"))
+
+        return orders
+
+
+class EmaPullbackStrategy(_BaseTimedStrategy):
+    """Ride an intraday trend using a dual-EMA bias and pullback entries."""
+
+    def __init__(
+        self,
+        symbols: Iterable[str],
+        position_sizer: PositionSizer,
+        close_buffer_minutes: int = 10,
+        fast_span: int = 12,
+        slow_span: int = 26,
+        pullback_buffer: float = 0.001,
+    ) -> None:
+        super().__init__(close_buffer_minutes)
+        self.symbols = list(symbols)
+        self.position_sizer = position_sizer
+        self.fast_span = max(2, fast_span)
+        self.slow_span = max(3, slow_span)
+        self.pullback_buffer = pullback_buffer
+        self._ema_fast: dict[str, float] = {}
+        self._ema_slow: dict[str, float] = {}
+
+    @staticmethod
+    def _update_ema(prev: Optional[float], price: float, span: int) -> float:
+        alpha = 2 / (span + 1)
+        if prev is None:
+            return price
+        return alpha * price + (1 - alpha) * prev
+
+    def _record_price(self, symbol: str, price: float) -> None:
+        self._ema_fast[symbol] = self._update_ema(
+            self._ema_fast.get(symbol), price, self.fast_span
+        )
+        self._ema_slow[symbol] = self._update_ema(
+            self._ema_slow.get(symbol), price, self.slow_span
+        )
+
+    def plan_orders(
+        self,
+        *,
+        now: dt.datetime,
+        next_close: dt.datetime,
+        positions: dict[str, int],
+        prices: dict[str, float],
+        equity: float,
+    ) -> list[OrderRequest]:
+        close_exits = self._exit_near_close(
+            now=now, next_close=next_close, positions=positions
+        )
+        if close_exits:
+            return close_exits
+
+        orders: list[OrderRequest] = []
+
+        for symbol in self.symbols:
+            price = prices.get(symbol)
+            if price is None:
+                continue
+
+            self._record_price(symbol, price)
+            ema_fast = self._ema_fast.get(symbol)
+            ema_slow = self._ema_slow.get(symbol)
+            if ema_fast is None or ema_slow is None:
+                continue
+
+            held_qty = positions.get(symbol, 0)
+
+            # Exit if the trend fails.
+            if held_qty > 0 and price < ema_slow:
+                orders.append(OrderRequest(symbol=symbol, qty=held_qty, side="sell"))
+                continue
+
+            bias_long = ema_fast > ema_slow and price >= ema_slow
+            pulled_back = price <= ema_fast * (1 + self.pullback_buffer)
+            if held_qty == 0 and bias_long and pulled_back:
+                qty = self.position_sizer.size_for_price(equity, price)
+                if qty > 0:
+                    orders.append(OrderRequest(symbol=symbol, qty=qty, side="buy"))
 
         return orders
 
@@ -229,6 +416,41 @@ def run_open_close_loop(
         LOG.info("Open/close loop interrupted by user; exiting cleanly")
 
 
+def _build_strategy(
+    name: str,
+    symbols: list[str],
+    sizer: PositionSizer,
+    close_buffer_minutes: int,
+    strategy_config: Optional[dict[str, Any]] = None,
+):
+    config = strategy_config or {}
+    if name == "open-close":
+        return OpenCloseMarketStrategy(symbols, sizer, close_buffer_minutes)
+    if name == "vwap-reversion":
+        return VwapReversionStrategy(
+            symbols,
+            sizer,
+            close_buffer_minutes=close_buffer_minutes,
+            z_threshold=float(config.get("z_threshold", 2.0)),
+            min_history=int(config.get("min_history", 5)),
+            history_window=int(config.get("history_window", 60)),
+        )
+    if name == "ema-pullback":
+        return EmaPullbackStrategy(
+            symbols,
+            sizer,
+            close_buffer_minutes=close_buffer_minutes,
+            fast_span=int(config.get("fast_span", 12)),
+            slow_span=int(config.get("slow_span", 26)),
+            pullback_buffer=float(config.get("pullback_buffer", 0.001)),
+        )
+    raise ValueError(
+        "Unknown strategy '{name}'. Supported: open-close, vwap-reversion, ema-pullback".format(
+            name=name
+        )
+    )
+
+
 def run_trading_session(
     *,
     symbols: list[str],
@@ -238,10 +460,12 @@ def run_trading_session(
     close_buffer_minutes: int,
     poll_seconds: int,
     client=None,
+    strategy_name: str = "open-close",
+    strategy_config: Optional[dict[str, Any]] = None,
     sleep_fn: Callable[[float], None] = time.sleep,
     max_cycles: int | None = None,
 ) -> None:
-    """Run a simple open/close trading loop with paper orders."""
+    """Run a simple trading loop with pluggable strategies and mode logging."""
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     from alpaca_trader.alpaca_client import AlpacaClient  # imported lazily
@@ -250,6 +474,7 @@ def run_trading_session(
     base_url = getattr(client, "base_url", "(unknown)")
     trading_mode = getattr(client, "trading_mode", "(unknown)")
     LOG.info("Alpaca endpoint: %s (%s trading)", base_url, trading_mode)
+    LOG.info("Strategy: %s", strategy_name)
     account = client.get_account()
     starting_equity = float(getattr(account, "equity", 0.0))
     risk_limits = RiskLimits(
@@ -257,7 +482,9 @@ def run_trading_session(
     )
     risk = RiskManager(starting_equity, risk_limits)
     sizer = PositionSizer(risk_limits, base_qty)
-    strategy = OpenCloseMarketStrategy(symbols, sizer, close_buffer_minutes)
+    strategy = _build_strategy(
+        strategy_name, symbols, sizer, close_buffer_minutes, strategy_config
+    )
 
     LOG.info(
         "Trading session: symbols=%s base_qty=%s risk_per_trade=%.2f%% loss_limit=%.2f%%",
