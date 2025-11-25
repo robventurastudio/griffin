@@ -46,3 +46,46 @@ Griffin should evolve beyond a single ORB play by shipping a small, modular coll
 5. Later, add range/Bollinger logic and the swing module once backtesting is available.
 
 This sequence yields coverage for morning trend, mid-day reversion, sustained trends, and special gap days without overcomplicating the codebase.
+
+## Build & Optimization Notes for the First Wave
+
+These snippets turn the roadmap into shippable work with clear tuning levers.
+
+### ORB (Opening Range Breakout)
+- **Build:**
+  - Reuse the existing strategy interface; compute the opening range on 5m bars (first 30–60 minutes) and emit long/short signals on range breaks with volume confirmation.
+  - Add guardrails: trading hours window, max concurrent symbols, and fail-safe flatten near close.
+  - Logging: capture range bounds, entry/exit prices, and volume at signal time for later review.
+- **Optimize:**
+  - Tune range duration (30 vs 60 minutes) and breakout buffer (ticks/percentage above range).
+  - Compare volume filters (e.g., >1.5× average for the bar) and stop placement (range low/high vs ATR-based).
+  - Run sample backtests on recent weeks and keep a per-symbol win/loss + expectancy table to prune weak names.
+
+### VWAP Mean Reversion
+- **Build:**
+  - Maintain rolling VWAP (1m/5m bars) and z-score of price vs VWAP; emit longs when price is ≤ −Zσ and shorts when price is ≥ +Zσ.
+  - Exits: primary target at VWAP touch; optional trail after a partial scale-out.
+  - Risk: cap size in low-liquidity names; disable in first 30 minutes to avoid ORB overlap.
+- **Optimize:**
+  - Sweep Z-thresholds (e.g., 1.5–2.5σ) and minimum volume filters.
+  - Add a regime filter (e.g., ATR percentile) to avoid running when volatility is spiking.
+  - Track slippage per symbol and widen stops/targets where fills degrade performance.
+
+### EMA Pullback (Intraday Trend)
+- **Build:**
+  - Compute dual EMAs (e.g., 20/50). Bias long when price > slow EMA; wait for pullbacks toward fast EMA with confirmation (e.g., bullish candle close) before entry. Mirror for shorts.
+  - Include higher-timeframe bias from a pre-open scan (gap/previous close context) to avoid countertrend trades.
+  - Stops: below the recent swing low for longs (swing high for shorts); targets via R-multiple or trailing EMA.
+- **Optimize:**
+  - Sweep EMA pairs (10/30, 20/50) and pullback depth (% from slow EMA) to improve participation vs whipsaw.
+  - Test an RSI or OBV filter to skip entries when momentum is exhausted.
+  - Measure trade duration and require minimum bar closes in favor before scaling size.
+
+### Gap Bias Module
+- **Build:**
+  - Pre-open compute gap % vs prior close and locate pre-market high/low; tag bias as fade/continue/neutral.
+  - Expose the bias to intraday strategies (ORB, EMA pullback) so they throttle or filter signals accordingly.
+  - Add safety: ignore low-volume gaps and extreme news-driven moves without liquidity.
+- **Optimize:**
+  - Tune thresholds for what constitutes a “large” gap (e.g., >1.5–2.0%).
+  - Track outcomes conditioned on bias state to refine how aggressively downstream strategies follow/ignore it.
