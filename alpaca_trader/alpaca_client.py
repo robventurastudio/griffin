@@ -65,12 +65,16 @@ class AlpacaClient:
     api_key_id: Optional[str] = None
     api_secret_key: Optional[str] = None
     base_url: Optional[str] = None
+    trading_mode: str = "paper"
 
     def __post_init__(self) -> None:
         self.api_key_id = self.api_key_id or os.getenv("APCA_API_KEY_ID")
         self.api_secret_key = self.api_secret_key or os.getenv("APCA_API_SECRET_KEY")
         raw_base_url = self.base_url or os.getenv("APCA_API_BASE_URL")
         self.base_url = normalize_base_url(raw_base_url)
+        self.trading_mode = (
+            "paper" if "paper-api" in self.base_url else "live"
+        )
 
         if not self.api_key_id or not self.api_secret_key:
             raise EnvironmentError(
@@ -111,3 +115,13 @@ class AlpacaClient:
         """Return the SSE URL to subscribe to a specific event type."""
 
         return build_events_url(self.base_url, event_type)
+
+    def get_previous_close(self, symbol: str):
+        """Return the prior close for ``symbol`` using a 1D bar lookup."""
+
+        bars = self._rest.get_bars(symbol, "1Day", limit=1)
+        if not bars:
+            return None
+
+        bar = bars[0]
+        return getattr(bar, "c", None) or getattr(bar, "close", None)

@@ -2,17 +2,23 @@ import datetime as dt
 import unittest
 
 from alpaca_trader.engine import (
+    BarData,
+    OpeningRangeBreakoutStrategy,
     OpenCloseMarketStrategy,
     PositionSizer,
     RiskLimits,
     RiskManager,
+    VwapReversionStrategy,
+    EmaPullbackStrategy,
+    GapBiasModule,
     run_trading_session,
 )
 
 
 class _FakeBar:
-    def __init__(self, close: float) -> None:
+    def __init__(self, close: float, volume: float | None = None) -> None:
         self.c = close
+        self.v = volume
 
 
 class _FakePosition:
@@ -43,6 +49,8 @@ class _FakeClient:
         prices: dict[str, float],
         positions=None,
         account_values: list[float] | None = None,
+        volumes: dict[str, float] | None = None,
+        previous_closes: dict[str, float] | None = None,
     ):
         self._clock = clock
         self._account = account
@@ -51,6 +59,8 @@ class _FakeClient:
         self._closed = False
         self._positions = positions or {}
         self._account_values = list(account_values or [])
+        self._volumes = volumes or {}
+        self._previous_closes = previous_closes or {}
 
     def get_clock(self):
         return self._clock
@@ -61,10 +71,13 @@ class _FakeClient:
         return self._account
 
     def latest_bar(self, symbol: str):
-        return _FakeBar(self._prices[symbol])
+        return _FakeBar(self._prices[symbol], self._volumes.get(symbol))
 
     def list_positions(self):
         return [_FakePosition(sym, qty) for sym, qty in self._positions.items()]
+
+    def get_previous_close(self, symbol: str):
+        return self._previous_closes.get(symbol)
 
     def submit_order(self, symbol: str, qty: int, side: str):
         self._orders.append((symbol, qty, side))
@@ -126,6 +139,30 @@ class StrategyTest(unittest.TestCase):
         self.assertEqual(len(orders), 1)
         self.assertEqual(orders[0].side, "sell")
         self.assertEqual(orders[0].qty, 10)
+
+
+class GapBiasModuleTest(unittest.TestCase):
+    def test_classifies_gap_and_resets_each_session(self):
+        module = GapBiasModule(threshold_pct=2.0)
+        session_one = dt.date(2024, 1, 1)
+        biases = module.update(
+            session_date=session_one,
+            prices={"SPY": 103.0},
+            previous_closes={"SPY": 100.0},
+        )
+
+        self.assertEqual(biases["SPY"], "bullish")
+        self.assertAlmostEqual(module.gap_pct("SPY"), 3.0)
+
+        session_two = session_one + dt.timedelta(days=1)
+        biases = module.update(
+            session_date=session_two,
+            prices={"SPY": 97.0},
+            previous_closes={"SPY": 100.0},
+        )
+
+        self.assertEqual(biases["SPY"], "bearish")
+        self.assertAlmostEqual(module.gap_pct("SPY"), -3.0)
 
 
 class TradingLoopTest(unittest.TestCase):
@@ -202,6 +239,204 @@ class TradingLoopTest(unittest.TestCase):
         )
 
         self.assertIn(("SPY", 10, "sell"), client._orders)
+
+
+class StrategyExpansionTest(unittest.TestCase):
+    def test_orb_builds_range_then_breaks_out(self):
+        sizer = PositionSizer(RiskLimits(per_trade_risk_pct=1), base_qty=1)
+        strat = OpeningRangeBreakoutStrategy(
+            ["SPY"], sizer, close_buffer_minutes=10, range_minutes=30, breakout_buffer=0.0
+        )
+
+        session_start = dt.datetime(2024, 1, 1, 14, 30, tzinfo=dt.timezone.utc)
+        # During the range-building window, no orders are emitted but the high/low are tracked.
+        orders = strat.plan_orders(
+            now=session_start,
+            next_close=session_start + dt.timedelta(hours=6),
+            positions={"SPY": 0},
+            prices={"SPY": 100},
+            equity=100_000,
+        )
+        self.assertEqual(orders, [])
+
+        breakout_time = session_start + dt.timedelta(minutes=31)
+        orders = strat.plan_orders(
+            now=breakout_time,
+            next_close=session_start + dt.timedelta(hours=6),
+            positions={"SPY": 0},
+            prices={"SPY": 101},
+            equity=100_000,
+        )
+        self.assertTrue(any(o.side == "buy" for o in orders))
+
+    def test_orb_exits_if_range_lows_break(self):
+        sizer = PositionSizer(RiskLimits(per_trade_risk_pct=1), base_qty=1)
+        strat = OpeningRangeBreakoutStrategy(
+            ["SPY"], sizer, close_buffer_minutes=10, range_minutes=1, breakout_buffer=0.0
+        )
+
+        session_start = dt.datetime(2024, 1, 2, 14, 30, tzinfo=dt.timezone.utc)
+        strat.plan_orders(
+            now=session_start,
+            next_close=session_start + dt.timedelta(hours=6),
+            positions={"SPY": 0},
+            prices={"SPY": 100},
+            equity=100_000,
+        )
+
+        after_range = session_start + dt.timedelta(minutes=2)
+        orders = strat.plan_orders(
+            now=after_range,
+            next_close=session_start + dt.timedelta(hours=6),
+            positions={"SPY": 10},
+            prices={"SPY": 95},
+            equity=100_000,
+        )
+        self.assertTrue(any(o.side == "sell" for o in orders))
+
+    def test_vwap_reversion_enters_when_discounted(self):
+        sizer = PositionSizer(RiskLimits(per_trade_risk_pct=1), base_qty=1)
+        strat = VwapReversionStrategy(
+            ["SPY"], sizer, close_buffer_minutes=10, z_threshold=1.5, min_history=3
+        )
+
+        for price in [100, 101, 99, 100]:
+            strat.price_history.add_price("SPY", price)
+
+        now = dt.datetime(2024, 1, 1, 14, 0, tzinfo=dt.timezone.utc)
+        orders = strat.plan_orders(
+            now=now,
+            next_close=now + dt.timedelta(hours=6),
+            positions={"SPY": 0},
+            prices={"SPY": 95},
+            equity=100_000,
+        )
+
+        self.assertTrue(any(o.side == "buy" for o in orders))
+
+    def test_vwap_reversion_respects_bearish_gap_bias(self):
+        sizer = PositionSizer(RiskLimits(per_trade_risk_pct=1), base_qty=1)
+        strat = VwapReversionStrategy(
+            ["SPY"], sizer, close_buffer_minutes=10, z_threshold=1.0, min_history=3
+        )
+
+        for price in [100.0, 101.0, 99.0]:
+            strat.price_history.add_price("SPY", price)
+
+        now = dt.datetime(2024, 1, 1, 14, 0, tzinfo=dt.timezone.utc)
+        biases = {"SPY": "bearish"}
+        blocked = strat.plan_orders(
+            now=now,
+            next_close=now + dt.timedelta(hours=6),
+            positions={"SPY": 0},
+            prices={"SPY": 95.0},
+            equity=100_000,
+            biases=biases,
+        )
+
+        self.assertEqual(blocked, [])
+
+        allowed = strat.plan_orders(
+            now=now,
+            next_close=now + dt.timedelta(hours=6),
+            positions={"SPY": 0},
+            prices={"SPY": 95.0},
+            equity=100_000,
+            biases={"SPY": "neutral"},
+        )
+
+        self.assertTrue(any(o.side == "buy" for o in allowed))
+
+    def test_vwap_reversion_uses_volume_weighting(self):
+        sizer = PositionSizer(RiskLimits(per_trade_risk_pct=1), base_qty=1)
+        strat = VwapReversionStrategy(
+            ["SPY"], sizer, close_buffer_minutes=10, z_threshold=1.0, min_history=2
+        )
+
+        now = dt.datetime(2024, 1, 1, 14, 0, tzinfo=dt.timezone.utc)
+        next_close = now + dt.timedelta(hours=6)
+
+        history = [(100.0, 1000.0), (110.0, 10.0)]
+        for price, vol in history:
+            strat.plan_orders(
+                now=now,
+                next_close=next_close,
+                positions={"SPY": 0},
+                prices={"SPY": price},
+                equity=100_000,
+                bars={"SPY": BarData(price=price, volume=vol)},
+            )
+
+        orders = strat.plan_orders(
+            now=now,
+            next_close=next_close,
+            positions={"SPY": 0},
+            prices={"SPY": 98.0},
+            equity=100_000,
+            bars={"SPY": BarData(price=98.0, volume=100.0)},
+        )
+
+        self.assertTrue(any(o.side == "buy" for o in orders))
+
+    def test_ema_pullback_exits_on_trend_failure(self):
+        sizer = PositionSizer(RiskLimits(per_trade_risk_pct=1), base_qty=1)
+        strat = EmaPullbackStrategy(["QQQ"], sizer, close_buffer_minutes=10)
+
+        now = dt.datetime(2024, 1, 1, 14, 0, tzinfo=dt.timezone.utc)
+        next_close = now + dt.timedelta(hours=6)
+        prices = [300, 301, 302, 303, 304]
+        for price in prices:
+            strat.plan_orders(
+                now=now,
+                next_close=next_close,
+                positions={"QQQ": 0},
+                prices={"QQQ": price},
+                equity=100_000,
+            )
+        orders = strat.plan_orders(
+            now=now,
+            next_close=next_close,
+            positions={"QQQ": 10},
+            prices={"QQQ": 290},
+            equity=100_000,
+        )
+
+        self.assertTrue(any(o.side == "sell" for o in orders))
+
+    def test_ema_pullback_waits_for_history_then_enters_on_pullback(self):
+        sizer = PositionSizer(RiskLimits(per_trade_risk_pct=1), base_qty=1)
+        strat = EmaPullbackStrategy(
+            ["QQQ"],
+            sizer,
+            close_buffer_minutes=10,
+            fast_span=3,
+            slow_span=5,
+            pullback_buffer=0.0,
+            min_history=3,
+        )
+
+        now = dt.datetime(2024, 1, 1, 14, 0, tzinfo=dt.timezone.utc)
+        next_close = now + dt.timedelta(hours=6)
+
+        for price in [300.0, 304.0]:
+            orders = strat.plan_orders(
+                now=now,
+                next_close=next_close,
+                positions={"QQQ": 0},
+                prices={"QQQ": price},
+                equity=100_000,
+            )
+            self.assertEqual(orders, [])
+
+        orders = strat.plan_orders(
+            now=now,
+            next_close=next_close,
+            positions={"QQQ": 0},
+            prices={"QQQ": 302.0},
+            equity=100_000,
+        )
+
+        self.assertTrue(any(o.side == "buy" for o in orders))
 
 
 if __name__ == "__main__":
